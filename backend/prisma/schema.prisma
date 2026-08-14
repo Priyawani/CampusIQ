@@ -1,0 +1,124 @@
+datasource db {
+  provider = "postgresql"
+}
+enum Role {
+  STUDENT
+  FACULTY
+  ADMIN
+  HOD
+  PLACEMENT_OFFICER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum ExamType {
+  INTERNAL
+  MIDTERM
+  END_SEMESTER
+  ASSIGNMENT
+  QUIZ
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student Student?
+  faculty Faculty?
+}
+
+model Department {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+
+  students Student[]
+  faculty  Faculty[]
+  subjects Subject[]
+}
+
+model Student {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  rollNumber    String   @unique
+  firstName     String
+  lastName      String
+  phone         String?
+  dateOfBirth   DateTime?
+  admissionYear Int
+  departmentId  Int
+
+  user       User       @relation(fields: [userId], references: [id])
+  department Department @relation(fields: [departmentId], references: [id])
+
+  enrollments Enrollment[]
+}
+
+model Faculty {
+  id           Int    @id @default(autoincrement())
+  userId       Int    @unique
+  employeeId   String @unique
+  firstName    String
+  lastName     String
+  departmentId Int
+
+  user       User       @relation(fields: [userId], references: [id])
+  department Department @relation(fields: [departmentId], references: [id])
+}
+
+model Subject {
+  id           Int      @id @default(autoincrement())
+  code         String   @unique
+  name         String
+  credits      Int
+  departmentId Int
+  createdAt    DateTime @default(now())
+
+  department  Department   @relation(fields: [departmentId], references: [id])
+  enrollments Enrollment[]
+}
+
+model Enrollment {
+  id            Int      @id @default(autoincrement())
+  studentId     Int
+  subjectId     Int
+  semester      Int
+  academicYear  String
+  createdAt     DateTime @default(now())
+
+  student     Student      @relation(fields: [studentId], references: [id])
+  subject     Subject      @relation(fields: [subjectId], references: [id])
+  attendance  Attendance[]
+  marks       Mark[]
+
+  @@unique([studentId, subjectId, semester, academicYear])
+}
+
+model Attendance {
+  id           Int              @id @default(autoincrement())
+  enrollmentId Int
+  date         DateTime
+  status       AttendanceStatus
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+
+  @@unique([enrollmentId, date])
+}
+
+model Mark {
+  id            Int      @id @default(autoincrement())
+  enrollmentId  Int
+  examType      ExamType
+  marksObtained Float
+  maxMarks      Float
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+}

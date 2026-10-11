@@ -85,3 +85,44 @@ CampusIQ/
     │   └── api.py           # FastAPI endpoints & inference logic
     ├── requirements.txt     
     └── Dockerfile
+
+<h2>⚙️ Local Development Setup</h2>
+    <p>To run CampusIQ locally, you will need to run three separate servers concurrently. Ensure you have Node.js (v18+), Python (3.10+), and PostgreSQL installed.</p>
+
+    <h3>Step 1: Database &amp; Backend</h3>
+<pre><code>cd backend
+npm install
+cp .env.example .env 
+# Update DATABASE_URL and JWT_SECRET in .env
+
+npx prisma db push
+npx prisma generate
+npm run dev # Starts on port 5000</code></pre>
+
+    <h3>Step 2: Machine Learning Microservice</h3>
+<pre><code>cd ml
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn src.api:app --reload # Starts on port 8000</code></pre>
+
+    <h3>Step 3: Frontend Client</h3>
+<pre><code>cd frontend
+npm install
+cp .env.example .env
+# Set VITE_API_URL=http://localhost:5000/api in .env
+
+npm run dev # Starts on port 5173</code></pre>
+
+    <hr>
+
+    <h2>👨‍💻 Author</h2>
+    <p><strong>Priyadarshini Wani</strong><br>
+    <em>B.Tech Computer Science and Engineering (Artificial Intelligence and Analytics)</em><br>
+    <a href="https://linkedin.com/in/yourprofile">LinkedIn</a> | <a href="https://github.com/yourusername">GitHub</a></p>
+
+    <h2>📄 License</h2>
+    <p>This project is open-source and available under the MIT License.</p>
+
+</body>
+</html>

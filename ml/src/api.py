@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import Optional
+import os
 import pandas as pd
 import joblib
 import shap
@@ -20,7 +22,10 @@ app = FastAPI(
 # 2. LOAD SAVED MODEL
 # ============================================================
 
-model_path = "models/student_performance_model.joblib"
+model_path = os.getenv(
+    "MODEL_PATH",
+    "models/student_performance_model.joblib",
+)
 
 pipeline = joblib.load(model_path)
 
@@ -32,48 +37,62 @@ explainer = shap.TreeExplainer(model)
 
 # ============================================================
 # 3. INPUT DATA MODEL
+# ------------------------------------------------------------
+# Accepts the live PostgreSQL-backed payload sent by Node.js:
+#   { studentId, attendanceRate, averageScore, ...modelFeatures }
+# `attendanceRate`  = Attendance % aggregated from Attendance table.
+# `averageScore`    = Average % aggregated from Mark table.
+# These live fields are mapped onto the CatBoost model's native
+# features (absences / failures) at inference time below, so the
+# prediction always uses the incoming live values — never a CSV lookup.
 # ============================================================
 
 class StudentData(BaseModel):
 
-    school: str
-    sex: str
-    age: int
-    address: str
-    famsize: str
-    Pstatus: str
+    # --- Live dynamic fields from Node.js / PostgreSQL (optional) ---
+    studentId: Optional[int] = None
+    attendanceRate: Optional[float] = None
+    averageScore: Optional[float] = None
 
-    Medu: int
-    Fedu: int
+    # --- Native CatBoost model features (UCI student-mat schema) ---
+    school: str = "GP"
+    sex: str = "F"
+    age: int = 18
+    address: str = "U"
+    famsize: str = "GT3"
+    Pstatus: str = "T"
 
-    Mjob: str
-    Fjob: str
+    Medu: int = 3
+    Fedu: int = 3
 
-    reason: str
-    guardian: str
+    Mjob: str = "services"
+    Fjob: str = "services"
 
-    traveltime: int
-    studytime: int
-    failures: int
+    reason: str = "course"
+    guardian: str = "mother"
 
-    schoolsup: str
-    famsup: str
-    paid: str
-    activities: str
-    nursery: str
-    higher: str
-    internet: str
-    romantic: str
+    traveltime: int = 1
+    studytime: int = 2
+    failures: int = 0
 
-    famrel: int
-    freetime: int
-    goout: int
+    schoolsup: str = "no"
+    famsup: str = "yes"
+    paid: str = "no"
+    activities: str = "yes"
+    nursery: str = "yes"
+    higher: str = "yes"
+    internet: str = "yes"
+    romantic: str = "no"
 
-    Dalc: int
-    Walc: int
+    famrel: int = 4
+    freetime: int = 3
+    goout: int = 3
 
-    health: int
-    absences: int
+    Dalc: int = 1
+    Walc: int = 1
+
+    health: int = 5
+    absences: int = 0
 
 
 # ============================================================
@@ -96,11 +115,67 @@ def root():
 @app.post("/predict")
 def predict_student(student: StudentData):
 
-    # Convert input to dictionary
+    # Convert input to dictionary.
+    # NOTE: inference uses ONLY these incoming live payload values.
+    # There is intentionally no CSV / static-dataset lookup here —
+    # Node.js already aggregated the student's live PostgreSQL rows
+    # (Attendance %, average Mark score) into this payload.
     student_dict = student.model_dump()
 
+    # --------------------------------------------------------
+    # Map live PostgreSQL fields onto native model features
+    # --------------------------------------------------------
+    # attendanceRate (0-100 %) -> absences (model-native count).
+    # Node.js already sends an accurate `absences` count, so only
+    # derive it when the caller sent attendanceRate without absences.
+    live_attendance = student_dict.get("attendanceRate")
+    live_score = student_dict.get("averageScore")
+
+    if live_attendance is not None:
+        try:
+            rate = max(0.0, min(100.0, float(live_attendance)))
+            # Heuristic fallback: ~0.25 absences per missed percent point.
+            derived_absences = int(round((100.0 - rate) * 0.25))
+            # Prefer the explicit live `absences` count when provided
+            # (Node sends both); otherwise use the derived value.
+            if student_dict.get("absences", 0) == 0 and derived_absences > 0:
+                student_dict["absences"] = max(0, min(75, derived_absences))
+        except (TypeError, ValueError):
+            pass
+
+    # averageScore (0-100 %) -> failures (model-native signal).
+    # A live average below 50% indicates a prior-failure pattern.
+    if live_score is not None:
+        try:
+            score = float(live_score)
+            if score <= 0:
+                pass  # no marks yet — keep caller-supplied failures
+            elif score < 40:
+                student_dict["failures"] = max(int(student_dict.get("failures", 0)), 2)
+            elif score < 50:
+                student_dict["failures"] = max(int(student_dict.get("failures", 0)), 1)
+            else:
+                # Strong live average clears a stale default failure flag
+                # only when the caller did not explicitly send failures.
+                pass
+        except (TypeError, ValueError):
+            pass
+
+    # Keep ONLY the columns the CatBoost pipeline was trained on.
+    # Extra live fields (studentId, attendanceRate, averageScore)
+    # are metadata for traceability — they must not reach the model.
+    model_features = [
+        "school", "sex", "age", "address", "famsize", "Pstatus",
+        "Medu", "Fedu", "Mjob", "Fjob", "reason", "guardian",
+        "traveltime", "studytime", "failures", "schoolsup", "famsup",
+        "paid", "activities", "nursery", "higher", "internet",
+        "romantic", "famrel", "freetime", "goout", "Dalc", "Walc",
+        "health", "absences",
+    ]
+    model_dict = {k: student_dict[k] for k in model_features}
+
     # Convert to DataFrame
-    student_df = pd.DataFrame([student_dict])
+    student_df = pd.DataFrame([model_dict])
 
     # --------------------------------------------------------
     # Prediction
@@ -341,5 +416,15 @@ def predict_student(student: StudentData):
 
         "performance_level": performance,
 
-        "explanations": top_explanations
+        "explanations": top_explanations,
+
+        # Echo the live PostgreSQL-derived inputs used for this
+        # inference (traceability for the Node.js caller).
+        "live_inputs": {
+            "studentId": student_dict.get("studentId"),
+            "attendanceRate": student_dict.get("attendanceRate"),
+            "averageScore": student_dict.get("averageScore"),
+            "absences": model_dict["absences"],
+            "failures": model_dict["failures"],
+        },
     }

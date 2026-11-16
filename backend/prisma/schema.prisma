@@ -6,17 +6,18 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
 enum Role {
-  STUDENT
+  SUPERADMIN
+  DEPT_ADMIN
   FACULTY
-  ADMIN
-  HOD
-  PLACEMENT_OFFICER
+  STUDENT
 }
 
 enum AttendanceStatus {
   PRESENT
   ABSENT
+  LATE
 }
 
 enum ExamType {
@@ -31,40 +32,89 @@ model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String
-  role         Role
+  role         Role     @default(FACULTY)
+  name         String?
+  phone        String?
+  bio          String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  student Student?
-  faculty Faculty?
+  // Tenancy: which department does this admin/faculty belong to?
+  departmentId Int?
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  // Faculty class assignments
+  assignedClasses ClassGroup[] @relation("FacultyClasses")
+
+  studentProfile Student?
+  faculty        Faculty?
+
+  @@index([departmentId])
 }
 
 model Department {
   id        Int      @id @default(autoincrement())
-  name      String
+  name      String   @unique
   code      String   @unique
   createdAt DateTime @default(now())
 
-  students Student[]
-  faculty  Faculty[]
-  subjects Subject[]
+  specializations Specialization[]
+  classGroups     ClassGroup[]
+  faculty         Faculty[]
+  subjects        Subject[]
+  users           User[]
+  students        Student[]
+}
+
+model Specialization {
+  id           Int          @id @default(autoincrement())
+  name         String
+  departmentId Int
+  department   Department   @relation(fields: [departmentId], references: [id])
+  classGroups  ClassGroup[]
+  createdAt    DateTime     @default(now())
+
+  @@unique([name, departmentId])
+}
+
+model ClassGroup {
+  id               Int             @id @default(autoincrement())
+  name             String
+  year             Int
+  departmentId     Int
+  department       Department      @relation(fields: [departmentId], references: [id])
+  specializationId Int?
+  specialization   Specialization? @relation(fields: [specializationId], references: [id])
+  students         Student[]
+  faculties        User[]          @relation("FacultyClasses")
+  createdAt        DateTime        @default(now())
+
+  @@unique([name, departmentId])
 }
 
 model Student {
-  id            Int      @id @default(autoincrement())
-  userId        Int      @unique
-  rollNumber    String   @unique
+  id            Int       @id @default(autoincrement())
+  userId        Int       @unique
+  rollNumber    String    @unique
   firstName     String
   lastName      String
   phone         String?
   dateOfBirth   DateTime?
   admissionYear Int
-  departmentId  Int
+  classGroupId  Int?
+  departmentId  Int?
+  rollNo        String?
+  contactNo     String?
+  parentEmail   String?
+  parentMobile  String?
 
-  user       User       @relation(fields: [userId], references: [id])
-  department Department @relation(fields: [departmentId], references: [id])
+  user       User        @relation(fields: [userId], references: [id])
+  classGroup ClassGroup? @relation(fields: [classGroupId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
 
   enrollments Enrollment[]
+
+  @@index([departmentId])
 }
 
 model Faculty {
@@ -85,6 +135,7 @@ model Subject {
   name         String
   credits      Int
   departmentId Int
+  abbreviation String?
   createdAt    DateTime @default(now())
 
   department  Department   @relation(fields: [departmentId], references: [id])
@@ -92,17 +143,17 @@ model Subject {
 }
 
 model Enrollment {
-  id            Int      @id @default(autoincrement())
-  studentId     Int
-  subjectId     Int
-  semester      Int
-  academicYear  String
-  createdAt     DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  studentId    Int
+  subjectId    Int
+  semester     Int
+  academicYear String
+  createdAt    DateTime @default(now())
 
-  student     Student      @relation(fields: [studentId], references: [id])
-  subject     Subject      @relation(fields: [subjectId], references: [id])
-  attendance  Attendance[]
-  marks       Mark[]
+  student    Student      @relation(fields: [studentId], references: [id])
+  subject    Subject      @relation(fields: [subjectId], references: [id])
+  attendance Attendance[]
+  marks      Mark[]
 
   @@unique([studentId, subjectId, semester, academicYear])
 }

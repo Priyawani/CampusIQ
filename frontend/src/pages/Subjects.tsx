@@ -1,31 +1,48 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import api from "../services/api";
-import "../App.css";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import { useToast } from "@/components/ui/use-toast";
 
 interface Subject {
   id: string;
   code: string;
+  abbreviation?: string | null;
   name: string;
   credits: number;
   department: string;
 }
 
+const ABBREVIATION_STOP_WORDS = new Set(["and", "of", "the", "for", "in", "on", "a", "an", "&"]);
+
+function toAbbreviation(name: string): string {
+  const abbreviation = name
+    .split(/\s+/)
+    .filter((word) => word.length > 0 && !ABBREVIATION_STOP_WORDS.has(word.toLowerCase()))
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+  return abbreviation || "-";
+}
+
 function Subjects() {
-  const navigate = useNavigate();
+  const { toast } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({
-    code: "", name: "", credits: "3", department: ""
+    courseCode: "", abbreviation: "", name: "", credits: "3"
   });
-
-  const handleLogout = () => {
-    localStorage.removeItem("campusiq_token");
-    navigate("/");
-  };
 
   const fetchSubjects = async () => {
     try {
@@ -45,130 +62,118 @@ function Subjects() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.post("/subjects", formData);
+      await api.post("/subjects", {
+        courseCode: formData.courseCode,
+        abbreviation: formData.abbreviation,
+        name: formData.name,
+        credits: Number(formData.credits),
+      });
       setIsModalOpen(false);
-      setFormData({ code: "", name: "", credits: "3", department: "" });
+      setFormData({ courseCode: "", abbreviation: "", name: "", credits: "3" });
       fetchSubjects(); // Refresh the table
+      toast({
+        title: "Subject saved",
+        description: "The new course has been added to the catalog.",
+      });
     } catch (error) {
       console.error("Failed to save subject:", error);
-      alert("Error saving subject. Check console.");
+      toast({
+        title: "Error saving subject",
+        description: "Check the browser console for details.",
+        variant: "destructive",
+      });
     }
   };
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="logo">
-          <div className="logo-icon">C</div>
+    <>
+      <div className="p-8 max-w-7xl w-full mx-auto space-y-6 overflow-y-auto">
+        <header className="flex justify-between items-end mb-8">
           <div>
-            <h2>CampusIQ</h2>
-            <span>Student Intelligence</span>
-          </div>
-        </div>
-
-        <nav className="navigation">
-          <button className="nav-item" onClick={() => navigate("/dashboard")}><span>⌂</span> Dashboard</button>
-          <button className="nav-item" onClick={() => navigate("/students")}><span>◉</span> Students</button>
-          <button className="nav-item" onClick={() => navigate("/attendance")}><span>▣</span> Attendance</button>
-          <button className="nav-item" onClick={() => navigate("/marks")}><span>◆</span> Marks</button>
-          <button className="nav-item active"><span>◈</span> Subjects</button>
-          <button className="nav-item"><span>✦</span> AI Predictions</button>
-        </nav>
-
-        <button className="nav-item" onClick={() => navigate("/ai-predictions")}>
-         <span>✦</span> AI Predictions
-       </button>
-
-        <div className="sidebar-bottom">
-          <button className="nav-item"><span>⚙</span> Settings</button>
-          <button className="nav-item" onClick={handleLogout}><span>↪</span> Logout</button>
-        </div>
-      </aside>
-
-      <main className="main-content">
-        <header className="topbar">
-          <div>
-            <p className="breadcrumb">CampusIQ / Subjects</p>
-            <h1>Course Catalog</h1>
+            <p className="text-xs text-slate-500 font-medium">CampusIQ / Subjects</p>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Course Catalog</h1>
           </div>
         </header>
 
-        <section className="dashboard">
-          <div className="section-header">
-            <div>
-              <p className="eyebrow">CURRICULUM</p>
-              <h2>Manage Subjects</h2>
-            </div>
-            <button className="primary-button" onClick={() => setIsModalOpen(true)}>
-              + Add Subject
-            </button>
+        <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Curriculum</p>
+            <p className="text-sm font-semibold text-slate-900">Manage Subjects</p>
           </div>
+          <Button onClick={() => setIsModalOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white">
+            + Add Subject
+          </Button>
+        </div>
 
-          <div className="data-table-container">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Subject Code</th>
-                  <th>Name</th>
-                  <th>Credits</th>
-                  <th>Department</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={5} style={{ textAlign: "center" }}>Loading subjects...</td></tr>
-                ) : subjects.length === 0 ? (
-                  <tr><td colSpan={5} style={{ textAlign: "center", color: "#6b7280" }}>No subjects found. Click "Add Subject" to create one.</td></tr>
-                ) : (
-                  subjects.map((subject) => (
-                    <tr key={subject.id}>
-                      <td><strong>{subject.code}</strong></td>
-                      <td>{subject.name}</td>
-                      <td>{subject.credits}</td>
-                      <td>{subject.department}</td>
-                      <td><button className="action-button">Edit</button></td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-y-auto max-h-[70vh]">
+          <Table className="text-xs">
+            <TableHeader className="sticky top-0 bg-white z-10 shadow-sm">
+              <TableRow className="h-8 hover:bg-slate-50">
+                <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Course Code</TableHead>
+                <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Subject Abbreviation</TableHead>
+                <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Subject Name</TableHead>
+                <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Credits</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow className="h-8 hover:bg-slate-50">
+                  <TableCell colSpan={4} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">Loading subjects...</TableCell>
+                </TableRow>
+              ) : subjects.length === 0 ? (
+                <TableRow className="h-8 hover:bg-slate-50">
+                  <TableCell colSpan={4} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">No subjects found. Click "Add Subject" to create one.</TableCell>
+                </TableRow>
+              ) : (
+                subjects.map((subject) => (
+                  <TableRow key={subject.id} className="h-8 hover:bg-slate-50">
+                    <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap"><span className="font-semibold text-slate-900">{subject.code}</span></TableCell>
+                    <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">{subject.abbreviation ?? toAbbreviation(subject.name)}</TableCell>
+                    <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">{subject.name}</TableCell>
+                    <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">{subject.credits}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
 
       {/* Add Subject Modal */}
       {isModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h2>Add New Subject</h2>
-            <form onSubmit={handleSubmit}>
-              <div className="form-group" style={{ marginTop: "1rem" }}>
-                <label>Subject Code</label>
-                <input required type="text" placeholder="e.g., CS101" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} />
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-lg w-full max-w-lg p-6">
+            <h2 className="text-xl font-bold text-slate-900">Add New Subject</h2>
+            <p className="text-sm text-slate-500 mt-1 mb-4">Create a new course in the catalog.</p>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Course Code</label>
+                  <Input required type="text" placeholder="e.g., CS101" value={formData.courseCode} onChange={e => setFormData({...formData, courseCode: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Abbreviation</label>
+                  <Input required type="text" placeholder="e.g., DSA" value={formData.abbreviation} onChange={e => setFormData({...formData, abbreviation: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Subject Name</label>
+                  <Input required type="text" placeholder="e.g., Data Structures and Algorithms" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Credits</label>
+                  <Input required type="number" min="1" max="6" value={formData.credits} onChange={e => setFormData({...formData, credits: e.target.value})} />
+                </div>
               </div>
-              <div className="form-group">
-                <label>Subject Name</label>
-                <input required type="text" placeholder="e.g., Data Structures" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-              </div>
-              <div className="form-group">
-                <label>Credits</label>
-                <input required type="number" min="1" max="6" value={formData.credits} onChange={e => setFormData({...formData, credits: e.target.value})} />
-              </div>
-              <div className="form-group">
-                <label>Department</label>
-                <input required type="text" placeholder="e.g., CSE" value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})} />
-              </div>
-              
-              <div className="modal-actions">
-                <button type="button" className="cancel-button" onClick={() => setIsModalOpen(false)}>Cancel</button>
-                <button type="submit" className="primary-button">Save Subject</button>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">Cancel</button>
+                <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white">Save Subject</Button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

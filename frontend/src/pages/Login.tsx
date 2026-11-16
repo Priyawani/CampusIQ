@@ -1,135 +1,154 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import "./Login.css";
+import api from "../services/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SELECTED_DEPARTMENT_KEY, setSelectedDepartmentId } from "../utils/department";
+
+const DEPARTMENT_OPTIONS = [
+  { value: "CSE", label: "Computer Science and Engineering (CSE)" },
+  { value: "IT", label: "Information Technology (IT)" },
+];
+
+interface Department {
+  id: number;
+  code: string;
+  name: string;
+}
 
 function Login() {
-  const navigate = useNavigate();
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedDepartment, setSelectedDepartment] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError("");
-    setLoading(true);
-
     try {
-      const response = await fetch("http://localhost:5000/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email,
-          password,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Invalid email or password");
+      const response = await api.post("/auth/login", { email, password });
+      localStorage.setItem("campusiq_token", response.data.token);
+      if (response.data.user?.role) {
+        localStorage.setItem("campusiq_role", response.data.user.role);
       }
 
-      // Store JWT token
-      localStorage.setItem("campusiq_token", data.token);
+      const department = DEPARTMENT_OPTIONS.find(
+        (option) => option.value === selectedDepartment
+      );
+      localStorage.setItem(
+        SELECTED_DEPARTMENT_KEY,
+        department?.label ?? selectedDepartment
+      );
 
-      // Store logged-in user information
-      localStorage.setItem("campusiq_user", JSON.stringify(data.user));
+      try {
+        const departmentsResponse = await api.get("/students/departments");
+        const departments = Array.isArray(departmentsResponse.data)
+          ? (departmentsResponse.data as Department[])
+          : [];
+        const matchedDepartment = departments.find(
+          (item) => item.code === selectedDepartment
+        );
+        if (matchedDepartment) {
+          setSelectedDepartmentId(matchedDepartment.id);
+        }
+      } catch {
+        // The dashboard will prompt for a department if it cannot be resolved.
+      }
 
-      // Go to dashboard
       navigate("/dashboard");
-    } catch (error) {
-      console.error("Login error:", error);
-
-      if (error instanceof Error) {
-        setError(error.message);
-      } else {
-        setError("Unable to login. Please try again.");
-      }
-    } finally {
-      setLoading(false);
+    } catch {
+      setError("Invalid email or password");
     }
   };
 
   return (
-    <div className="login-page">
-      <div className="login-container">
-
-        <div className="login-brand">
-          <div className="login-logo">C</div>
-
-          <h1>CampusIQ</h1>
-
-          <p>
-            Student Intelligence Platform
-          </p>
-        </div>
-
-        <div className="login-card">
-          <h2>Welcome back</h2>
-
-          <p className="login-subtitle">
-            Sign in to continue to your dashboard
-          </p>
-
-          <form onSubmit={handleSubmit}>
-
-            <div className="form-group">
-              <label htmlFor="email">
-                Email
-              </label>
-
-              <input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-              />
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <Card className="w-full max-w-md shadow-lg border-slate-200">
+        <CardHeader className="space-y-2 text-center pb-6">
+          <div className="flex justify-center mb-4">
+            <div className="w-14 h-14 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-2xl font-bold shadow-sm">
+              C
             </div>
-
-            <div className="form-group">
-              <label htmlFor="password">
-                Password
-              </label>
-
-              <input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-            </div>
-
+          </div>
+          <CardTitle className="text-2xl font-bold tracking-tight text-slate-900">
+            Welcome to CampusIQ
+          </CardTitle>
+          <CardDescription className="text-slate-500">
+            Enter your admin credentials to access the platform
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleLogin} className="space-y-4">
             {error && (
-              <p className="login-error">
+              <div className="bg-red-50 text-red-600 text-sm p-3 rounded-md border border-red-200 text-center font-medium">
                 {error}
-              </p>
+              </div>
             )}
-
-            <button
-              type="submit"
-              className="login-button"
-              disabled={loading}
+            <div className="space-y-2">
+              <Input
+                type="email"
+                placeholder="name@institution.edu"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-11"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-11"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <label
+                htmlFor="department"
+                className="block text-sm font-medium text-slate-700"
+              >
+                Select Department
+              </label>
+              <select
+                id="department"
+                value={selectedDepartment}
+                onChange={(e) => setSelectedDepartment(e.target.value)}
+                className="flex h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                required
+              >
+                <option value="" disabled>
+                  Select Department
+                </option>
+                {DEPARTMENT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button 
+              type="submit" 
+              className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white text-base font-medium transition-colors"
             >
-              {loading ? "Signing In..." : "Sign In"}
-            </button>
-
+              Sign In
+            </Button>
+            <p className="text-sm text-slate-500 text-center">
+              Don&apos;t have an account?{" "}
+              <button
+                type="button"
+                onClick={() => navigate("/register")}
+                className="text-indigo-600 hover:text-indigo-700 font-medium"
+              >
+                Register here
+              </button>
+            </p>
           </form>
-
-          <p className="login-footer">
-            CampusIQ • Student Intelligence Platform
-          </p>
-        </div>
-
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

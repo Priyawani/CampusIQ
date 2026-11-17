@@ -72,6 +72,7 @@ model Specialization {
   departmentId Int
   department   Department   @relation(fields: [departmentId], references: [id])
   classGroups  ClassGroup[]
+  subjects     Subject[]
   createdAt    DateTime     @default(now())
 
   @@unique([name, departmentId])
@@ -87,6 +88,7 @@ model ClassGroup {
   specialization   Specialization? @relation(fields: [specializationId], references: [id])
   students         Student[]
   faculties        User[]          @relation("FacultyClasses")
+  subjects         Subject[]
   createdAt        DateTime        @default(now())
 
   @@unique([name, departmentId])
@@ -112,7 +114,8 @@ model Student {
   classGroup ClassGroup? @relation(fields: [classGroupId], references: [id])
   department Department? @relation(fields: [departmentId], references: [id])
 
-  enrollments Enrollment[]
+  enrollments  Enrollment[]
+  mlPrediction MLPrediction?
 
   @@index([departmentId])
 }
@@ -130,16 +133,23 @@ model Faculty {
 }
 
 model Subject {
-  id           Int      @id @default(autoincrement())
-  code         String   @unique
-  name         String
-  credits      Int
-  departmentId Int
-  abbreviation String?
-  createdAt    DateTime @default(now())
+  id               Int      @id @default(autoincrement())
+  code             String   @unique
+  name             String
+  year             Int      @default(1)
+  credits          Int
+  departmentId     Int
+  specializationId Int?
+  abbreviation     String?
+  createdAt        DateTime @default(now())
 
-  department  Department   @relation(fields: [departmentId], references: [id])
-  enrollments Enrollment[]
+  department     Department      @relation(fields: [departmentId], references: [id])
+  specialization Specialization? @relation(fields: [specializationId], references: [id])
+  classGroups    ClassGroup[]
+  enrollments    Enrollment[]
+
+  @@index([departmentId, year])
+  @@index([specializationId])
 }
 
 model Enrollment {
@@ -177,4 +187,18 @@ model Mark {
   maxMarks      Float
 
   enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+}
+
+model MLPrediction {
+  id             Int      @id @default(autoincrement())
+  studentId      Int      @unique
+  riskScore      Float
+  isAtRisk       Boolean
+  factors        String?
+  lastCalculated DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@index([isAtRisk])
+  @@index([lastCalculated])
 }

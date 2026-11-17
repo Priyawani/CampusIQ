@@ -83,7 +83,7 @@ function MLStudentAnalysis() {
               <CartesianGrid />
               <XAxis type="number" dataKey="attendance" name="Attendance" unit="%" domain={[40, 100]} />
               <YAxis type="number" dataKey="marks" name="Avg Marks" unit="%" domain={[40, 100]} />
-              <Tooltip cursor={{ strokeDasharray: "3 3" }} formatter={(v: any, n: any, p: any) => [v, n === "attendance" ? "Attendance %" : n === "marks" ? "Avg Marks %" : n]} />
+              <Tooltip cursor={{ strokeDasharray: "3 3" }} formatter={(v: any, n: any) => [v, n === "attendance" ? "Attendance %" : n === "marks" ? "Avg Marks %" : n]} />
               <Scatter name="Students" data={attendanceVsMarks} fill="#6366f1">
                 {attendanceVsMarks.map((e, i) => <Cell key={i} fill={scatterColor(e.risk)} />)}
               </Scatter>

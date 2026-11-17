@@ -1,6 +1,7 @@
 import cors from "cors";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
 import academicRoutes from "./routes/academic.routes.js";
 import enrollmentRoutes from "./routes/enrollment.routes.js";
 import facultyRoutes from "./routes/faculty.routes.js";
@@ -31,6 +32,7 @@ app.get("/", (req: Request, res: Response) => {
 });
 
 app.use("/api/ai", aiRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/test", testRoutes);
 app.use("/api/dashboard", dashboardRoutes);

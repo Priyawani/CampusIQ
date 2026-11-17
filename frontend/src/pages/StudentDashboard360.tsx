@@ -1,5 +1,7 @@
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { Users, BookOpen, ClipboardList, CalendarCheck, BrainCircuit, LayoutDashboard } from "lucide-react";
+import FilterHierarchy, { type HierarchyFilters } from "../components/FilterHierarchy";
 import { getUserRole } from "../utils/auth";
 
 const adminModules = [
@@ -19,6 +21,15 @@ const studentModules = [
 
 function StudentDashboard360() {
   const role = getUserRole() ?? "GUEST";
+  const [filters, setFilters] = useState<HierarchyFilters>({
+    year: "",
+    classGroupId: "",
+    specializationId: "",
+    subjectId: "",
+  });
+  const handleFiltersChange = useCallback((next: HierarchyFilters) => {
+    setFilters(next);
+  }, []);
   const cards = role === "STUDENT" ? studentModules : adminModules.filter((m) => m.roles.includes(role));
 
   return (
@@ -36,6 +47,8 @@ function StudentDashboard360() {
           {!["FACULTY","DEPT_ADMIN","SUPERADMIN","STUDENT"].includes(role) && `Scoped: ${role}`}
         </div>
       </div>
+
+      <FilterHierarchy value={filters} onChange={handleFiltersChange} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {cards.map(({ to, title, desc, icon: Icon, color }) => (

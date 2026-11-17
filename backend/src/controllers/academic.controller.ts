@@ -94,7 +94,10 @@ async function resolveEnrollment(studentId: number, subjectId: number) {
 export async function listSubjects(_req: Request, res: Response) {
   try {
     const subjects = await prisma.subject.findMany({
-      include: { department: true },
+      include: {
+        department: true,
+        classGroups: { select: { id: true } },
+      },
       orderBy: { code: "asc" },
     });
 
@@ -105,7 +108,10 @@ export async function listSubjects(_req: Request, res: Response) {
         abbreviation: s.abbreviation,
         name: s.name,
         credits: s.credits,
+        year: s.year,
         department: s.department.code,
+        specializationId: s.specializationId,
+        classGroupIds: s.classGroups.map((classGroup) => classGroup.id),
       }))
     );
   } catch (error) {
@@ -404,13 +410,13 @@ export async function createMark(req: Request, res: Response) {
 
     const student = await prisma.student.findUnique({
       where: { id: parsedStudentId },
-      include: { classGroup: { include: { specialization: { include: { department: true } } } } },
+      include: { classGroup: true },
     });
     if (!student) {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    const departmentId = student.classGroup?.specialization?.departmentId;
+    const departmentId = student.classGroup?.departmentId ?? student.departmentId;
 
     // Resolve the subject: explicit id/code win, otherwise fall back to the
     // default "General Academics" subject in the student's department.
@@ -441,6 +447,9 @@ export async function createMark(req: Request, res: Response) {
           },
         });
       }
+    }
+    if (!subject) {
+      return res.status(400).json({ message: "Unable to resolve a subject for this student" });
     }
 
     const enrollment = await resolveEnrollment(parsedStudentId, subject.id);
@@ -938,13 +947,13 @@ export async function createAttendance(req: Request, res: Response) {
 
     const student = await prisma.student.findUnique({
       where: { id: parsedStudentId },
-      include: { classGroup: { include: { specialization: { include: { department: true } } } } },
+      include: { classGroup: true },
     });
     if (!student) {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    const departmentId = student.classGroup?.specialization?.departmentId;
+    const departmentId = student.classGroup?.departmentId ?? student.departmentId;
 
     // Resolve the subject: explicit id/code win, otherwise fall back to the
     // default "General Attendance" subject in the student's department.
@@ -975,6 +984,9 @@ export async function createAttendance(req: Request, res: Response) {
           },
         });
       }
+    }
+    if (!subject) {
+      return res.status(400).json({ message: "Unable to resolve a subject for this student" });
     }
 
     const enrollment = await resolveEnrollment(parsedStudentId, subject.id);

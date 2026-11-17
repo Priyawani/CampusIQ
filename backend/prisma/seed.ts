@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
+import { faker } from "@faker-js/faker";
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -27,6 +28,263 @@ const SPEC_PREFIX: Record<(typeof SPECIALIZATION_NAMES)[number], string> = {
 };
 const SPEC_CLASS_COUNT_Y3 = 9; // Year 3 specialized divisions per spec
 const SPEC_CLASS_COUNT_Y4 = 9; // Year 4 specialized divisions per spec
+const CSE_SUBJECT_CREDITS = 4;
+const ACADEMIC_YEAR = "2025-26";
+const ATTENDANCE_DAYS = 30;
+const ATTENDANCE_DATES = Array.from({ length: ATTENDANCE_DAYS }, (_, index) => {
+  const date = new Date("2025-07-01T00:00:00.000Z");
+  date.setUTCDate(date.getUTCDate() + index);
+  return date;
+});
+const MARK_TEMPLATES = [
+  { examType: "ASSIGNMENT" as const, maxMarks: 10 },
+  { examType: "ASSIGNMENT" as const, maxMarks: 10 },
+  { examType: "INTERNAL" as const, maxMarks: 50 },
+];
+
+const CSE_SUBJECTS = [
+  { code: "MATH101", name: "Engineering Mathematics-I", year: 1, specializationName: null },
+  { code: "CS101", name: "C Programming", year: 1, specializationName: null },
+  { code: "EE101", name: "Basic Electrical Engineering", year: 1, specializationName: null },
+  { code: "CS201", name: "Data Structures and Algorithms", year: 2, specializationName: null },
+  { code: "CS202", name: "Database Management Systems", year: 2, specializationName: null },
+  { code: "CS203", name: "Software Engineering", year: 2, specializationName: null },
+  { code: "AIA301", name: "Artificial Intelligence", year: 3, specializationName: "Artificial Intelligence and Analytics" },
+  { code: "AIA302", name: "Machine Learning", year: 3, specializationName: "Artificial Intelligence and Analytics" },
+  { code: "AIA401", name: "Deep Learning", year: 4, specializationName: "Artificial Intelligence and Analytics" },
+  { code: "AIA402", name: "Natural Language Processing", year: 4, specializationName: "Artificial Intelligence and Analytics" },
+  { code: "CYB301", name: "Cryptography", year: 3, specializationName: "Cyber Security and Forensics" },
+  { code: "CYB302", name: "Network Security", year: 3, specializationName: "Cyber Security and Forensics" },
+  { code: "CYB401", name: "Ethical Hacking", year: 4, specializationName: "Cyber Security and Forensics" },
+  { code: "CYB402", name: "Digital Forensics", year: 4, specializationName: "Cyber Security and Forensics" },
+  { code: "COR301", name: "Operating Systems", year: 3, specializationName: "Core" },
+  { code: "COR302", name: "Computer Networks", year: 3, specializationName: "Core" },
+  { code: "COR401", name: "System Design", year: 4, specializationName: "Core" },
+  { code: "COR402", name: "Cloud Computing", year: 4, specializationName: "Core" },
+] as const;
+
+function generateEnrollmentNumber(
+  departmentCode: string,
+  classGroupId: number,
+  usedNumbers: Set<string>
+) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const enrollmentNumber = `MIT-${departmentCode}-2024-${classGroupId}-${faker.string.numeric(4)}`;
+    if (!usedNumbers.has(enrollmentNumber)) {
+      usedNumbers.add(enrollmentNumber);
+      return enrollmentNumber;
+    }
+  }
+  throw new Error(`Unable to generate a unique enrollment number for class ${classGroupId}`);
+}
+
+function splitFullName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/);
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" ") || faker.person.lastName(),
+  };
+}
+
+interface ClassContext {
+  id: number;
+  year: number;
+  departmentId: number;
+  specializationId: number | null;
+}
+
+interface TelemetryStudent {
+  studentId: number;
+  attendanceRate: number;
+  markMultiplier: number;
+}
+
+async function ensureClassSubjects(classGroup: ClassContext) {
+  let subjects = await prisma.subject.findMany({
+    where: {
+      departmentId: classGroup.departmentId,
+      year: classGroup.year,
+      specializationId: classGroup.specializationId,
+    },
+    select: { id: true },
+  });
+
+  if (subjects.length === 0) {
+    const code = `GEN-${classGroup.departmentId}-Y${classGroup.year}`;
+    const subject = await prisma.subject.upsert({
+      where: { code },
+      update: {},
+      create: {
+        code,
+        name: `General Studies - Year ${classGroup.year}`,
+        year: classGroup.year,
+        credits: 4,
+        departmentId: classGroup.departmentId,
+        specializationId: null,
+      },
+    });
+    await prisma.subject.update({
+      where: { id: subject.id },
+      data: { classGroups: { connect: { id: classGroup.id } } },
+    });
+    subjects = [{ id: subject.id }];
+  }
+
+  return subjects;
+}
+
+async function seedAcademicTelemetry(
+  students: TelemetryStudent[],
+  classGroup: ClassContext
+) {
+  if (students.length === 0) return;
+
+  const subjects = await ensureClassSubjects(classGroup);
+  const subjectIds = subjects.map((subject) => subject.id);
+  const studentIds = students.map((student) => student.studentId);
+
+  await prisma.enrollment.createMany({
+    data: students.flatMap((student) =>
+      subjectIds.map((subjectId) => ({
+        studentId: student.studentId,
+        subjectId,
+        semester: classGroup.year,
+        academicYear: ACADEMIC_YEAR,
+      }))
+    ),
+    skipDuplicates: true,
+  });
+
+  const enrollments = await prisma.enrollment.findMany({
+    where: {
+      studentId: { in: studentIds },
+      subjectId: { in: subjectIds },
+      semester: classGroup.year,
+      academicYear: ACADEMIC_YEAR,
+    },
+    select: { id: true, studentId: true },
+  });
+  const enrollmentIds = enrollments.map((enrollment) => enrollment.id);
+  if (enrollmentIds.length === 0) return;
+
+  await prisma.mark.deleteMany({
+    where: { enrollmentId: { in: enrollmentIds } },
+  });
+
+  const markMultipliers = new Map(
+    students.map((student) => [student.studentId, student.markMultiplier])
+  );
+  const markTotals = new Map<number, { obtained: number; max: number }>();
+  const markData: {
+    enrollmentId: number;
+    examType: "ASSIGNMENT" | "INTERNAL";
+    marksObtained: number;
+    maxMarks: number;
+  }[] = [];
+
+  for (const enrollment of enrollments) {
+    const multiplier = markMultipliers.get(enrollment.studentId) ?? 1;
+    for (const template of MARK_TEMPLATES) {
+      const marksObtained =
+        Math.round(template.maxMarks * multiplier * 10) / 10;
+      markData.push({
+        enrollmentId: enrollment.id,
+        examType: template.examType,
+        marksObtained,
+        maxMarks: template.maxMarks,
+      });
+      const totals = markTotals.get(enrollment.studentId) ?? {
+        obtained: 0,
+        max: 0,
+      };
+      totals.obtained += marksObtained;
+      totals.max += template.maxMarks;
+      markTotals.set(enrollment.studentId, totals);
+    }
+  }
+
+  await prisma.mark.createMany({ data: markData });
+
+  const primaryEnrollmentByStudent = new Map<number, number>();
+  for (const enrollment of enrollments) {
+    if (!primaryEnrollmentByStudent.has(enrollment.studentId)) {
+      primaryEnrollmentByStudent.set(enrollment.studentId, enrollment.id);
+    }
+  }
+
+  const attendanceByStudent = new Map<number, number>();
+  const attendanceData: {
+    enrollmentId: number;
+    date: Date;
+    status: "PRESENT" | "ABSENT";
+  }[] = [];
+
+  for (const student of students) {
+    const enrollmentId = primaryEnrollmentByStudent.get(student.studentId);
+    if (!enrollmentId) continue;
+
+    let presentDays = 0;
+    for (const date of ATTENDANCE_DATES) {
+      const status =
+        faker.number.float({ min: 0, max: 1 }) < student.attendanceRate
+          ? "PRESENT"
+          : "ABSENT";
+      if (status === "PRESENT") presentDays++;
+      attendanceData.push({ enrollmentId, date, status });
+    }
+    attendanceByStudent.set(
+      student.studentId,
+      (presentDays / ATTENDANCE_DATES.length) * 100
+    );
+  }
+
+  await prisma.attendance.createMany({
+    data: attendanceData,
+    skipDuplicates: true,
+  });
+
+  for (const student of students) {
+    const avgAttendance = attendanceByStudent.get(student.studentId) ?? 0;
+    const totals = markTotals.get(student.studentId);
+    const avgMarks =
+      totals && totals.max > 0 ? (totals.obtained / totals.max) * 100 : 0;
+
+    let riskProbability = 0.1;
+    if (avgAttendance < 75 && avgMarks < 40) {
+      riskProbability = faker.number.float({ min: 0.85, max: 0.99 });
+    } else if (avgAttendance < 75 || avgMarks < 40) {
+      riskProbability = faker.number.float({ min: 0.5, max: 0.84 });
+    }
+
+    const factors =
+      avgAttendance < 75 && avgMarks < 40
+        ? "Attendance drop, Low CA marks"
+        : avgAttendance < 75
+          ? "Attendance drop"
+          : avgMarks < 40
+            ? "Low CA marks"
+            : "Stable attendance and marks";
+    const riskScore = Math.round(riskProbability * 1000) / 1000;
+    const lastCalculated = new Date();
+
+    await prisma.mLPrediction.upsert({
+      where: { studentId: student.studentId },
+      update: {
+        riskScore,
+        isAtRisk: riskProbability > 0.75,
+        factors,
+        lastCalculated,
+      },
+      create: {
+        studentId: student.studentId,
+        riskScore,
+        isAtRisk: riskProbability > 0.75,
+        factors,
+        lastCalculated,
+      },
+    });
+  }
+}
 
 async function ensureDeptHierarchy(departmentId: number, deptCode: string) {
   // 1st & 2nd Year (FY & SY): Common SOC classes, nullable specialization
@@ -69,6 +327,63 @@ async function ensureDeptHierarchy(departmentId: number, deptCode: string) {
   console.log(
     `Seeded hierarchy for ${deptCode}: ${SOC_CLASS_COUNT} SOC + ${SPECIALIZATION_NAMES.length * SPEC_CLASS_COUNT_Y3} Y3 specialized + ${SPECIALIZATION_NAMES.length * SPEC_CLASS_COUNT_Y4} Y4 specialized classes.`
   );
+}
+
+async function ensureCseSubjects(departmentId: number) {
+  const specializations = await prisma.specialization.findMany({
+    where: { departmentId },
+  });
+  const specializationIds = new Map(
+    specializations.map((specialization) => [specialization.name, specialization.id])
+  );
+
+  for (const subject of CSE_SUBJECTS) {
+    const specializationId = subject.specializationName
+      ? specializationIds.get(subject.specializationName)
+      : null;
+    if (subject.specializationName && !specializationId) {
+      throw new Error(`Specialization "${subject.specializationName}" not found for CSE`);
+    }
+
+    await prisma.subject.upsert({
+      where: { code: subject.code },
+      update: {
+        name: subject.name,
+        year: subject.year,
+        departmentId,
+        specializationId: specializationId ?? null,
+      },
+      create: {
+        code: subject.code,
+        name: subject.name,
+        year: subject.year,
+        credits: CSE_SUBJECT_CREDITS,
+        departmentId,
+        specializationId: specializationId ?? null,
+      },
+    });
+  }
+
+  const classes = await prisma.classGroup.findMany({ where: { departmentId } });
+  for (const subject of CSE_SUBJECTS) {
+    const specializationId = subject.specializationName
+      ? specializationIds.get(subject.specializationName) ?? null
+      : null;
+    const linkedClasses = classes
+      .filter(
+        (classGroup) =>
+          classGroup.year === subject.year &&
+          classGroup.specializationId === specializationId
+      )
+      .map((classGroup) => ({ id: classGroup.id }));
+
+    await prisma.subject.update({
+      where: { code: subject.code },
+      data: { classGroups: { set: linkedClasses } },
+    });
+  }
+
+  console.log(`Seeded ${CSE_SUBJECTS.length} year-wise CSE subjects.`);
 }
 
 async function main() {
@@ -114,8 +429,239 @@ async function main() {
 
   await ensureDeptHierarchy(cse.id, "CSE");
   await ensureDeptHierarchy(it.id, "IT");
+  await ensureCseSubjects(cse.id);
 
-  console.log("Database seed completed successfully (MIT ADT: CSE, IT, SOC 1-24, Core/AIA/Cyber).");
+  const aia1Class = await prisma.classGroup.findUniqueOrThrow({
+    where: {
+      name_departmentId: { name: "AIA - 1", departmentId: cse.id },
+    },
+  });
+
+  const allClasses = await prisma.classGroup.findMany();
+  const departmentCodes = new Map<number, string>([
+    [cse.id, "CSE"],
+    [it.id, "IT"],
+  ]);
+  const existingRollNumbers = await prisma.student.findMany({
+    select: { rollNumber: true },
+  });
+  const usedEnrollmentNumbers = new Set(
+    existingRollNumbers.map((student) => student.rollNumber)
+  );
+  const passwordHash = await bcrypt.hash("password123", 10);
+
+  let studentsCreated = 0;
+  for (const classGroup of allClasses) {
+    const studentCount = Math.floor(Math.random() * 6) + 50;
+    const departmentCode = departmentCodes.get(classGroup.departmentId) ?? "CSE";
+    const studentSpecs = Array.from({ length: studentCount }, () => {
+      const enrollmentNumber = generateEnrollmentNumber(
+        departmentCode,
+        classGroup.id,
+        usedEnrollmentNumbers
+      );
+      const { firstName, lastName } = splitFullName(faker.person.fullName());
+      const isAtRiskCohort = faker.number.float({ min: 0, max: 1 }) < 0.2;
+
+      return {
+        enrollmentNumber,
+        firstName,
+        lastName,
+        phone: faker.phone.number(),
+        email: `${enrollmentNumber.toLowerCase()}@student.campusiq.com`,
+        attendanceRate: isAtRiskCohort
+          ? faker.number.float({ min: 0.5, max: 0.7 })
+          : faker.number.float({ min: 0.8, max: 0.96 }),
+        markMultiplier: isAtRiskCohort
+          ? faker.number.float({ min: 0.25, max: 0.42 })
+          : faker.number.float({ min: 0.7, max: 0.98 }),
+      };
+    });
+
+    await prisma.user.createMany({
+      data: studentSpecs.map((student) => ({
+        name: `${student.firstName} ${student.lastName}`,
+        email: student.email,
+        passwordHash,
+        role: "STUDENT",
+        departmentId: classGroup.departmentId,
+      })),
+    });
+
+    const createdUsers = await prisma.user.findMany({
+      where: { email: { in: studentSpecs.map((student) => student.email) } },
+      select: { id: true, email: true },
+    });
+    const usersByEmail = new Map(
+      createdUsers.map((user) => [user.email, user.id])
+    );
+
+    await prisma.student.createMany({
+      data: studentSpecs.map((student) => ({
+        userId: usersByEmail.get(student.email)!,
+        rollNumber: student.enrollmentNumber,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        phone: student.phone,
+        admissionYear: 2024,
+        classGroupId: classGroup.id,
+        departmentId: classGroup.departmentId,
+      })),
+    });
+
+    const createdStudents = await prisma.student.findMany({
+      where: {
+        rollNumber: { in: studentSpecs.map((student) => student.enrollmentNumber) },
+      },
+      select: { id: true, rollNumber: true },
+    });
+    const studentsByRollNumber = new Map(
+      createdStudents.map((student) => [student.rollNumber, student.id])
+    );
+
+    const telemetryStudents: TelemetryStudent[] = studentSpecs.map((student) => ({
+      studentId: studentsByRollNumber.get(student.enrollmentNumber)!,
+      attendanceRate: student.attendanceRate,
+      markMultiplier: student.markMultiplier,
+    }));
+
+    await seedAcademicTelemetry(telemetryStudents, {
+      id: classGroup.id,
+      year: classGroup.year,
+      departmentId: classGroup.departmentId,
+      specializationId: classGroup.specializationId,
+    });
+
+    studentsCreated += studentSpecs.length;
+  }
+
+  await prisma.user.upsert({
+    where: { email: "superadmin@campusiq.com" },
+    update: {
+      name: "Test Super Admin",
+      role: "SUPERADMIN",
+      passwordHash,
+      departmentId: null,
+    },
+    create: {
+      name: "Test Super Admin",
+      email: "superadmin@campusiq.com",
+      passwordHash,
+      role: "SUPERADMIN",
+      departmentId: null,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "cse_admin@campusiq.com" },
+    update: {
+      name: "Test CSE Admin",
+      role: "DEPT_ADMIN",
+      passwordHash,
+      departmentId: cse.id,
+    },
+    create: {
+      name: "Test CSE Admin",
+      email: "cse_admin@campusiq.com",
+      passwordHash,
+      role: "DEPT_ADMIN",
+      departmentId: cse.id,
+    },
+  });
+
+  const testFaculty = await prisma.user.upsert({
+    where: { email: "faculty_aia1@campusiq.com" },
+    update: {
+      name: "Test AIA-1 Faculty",
+      role: "FACULTY",
+      passwordHash,
+      department: { connect: { id: cse.id } },
+      assignedClasses: { set: [{ id: aia1Class.id }] },
+    },
+    create: {
+      name: "Test AIA-1 Faculty",
+      email: "faculty_aia1@campusiq.com",
+      passwordHash,
+      role: "FACULTY",
+      department: { connect: { id: cse.id } },
+      assignedClasses: { connect: { id: aia1Class.id } },
+    },
+  });
+
+  await prisma.faculty.upsert({
+    where: { userId: testFaculty.id },
+    update: {
+      employeeId: "MIT-FAC-TEST-001",
+      firstName: "Test",
+      lastName: "Faculty",
+      departmentId: cse.id,
+    },
+    create: {
+      userId: testFaculty.id,
+      employeeId: "MIT-FAC-TEST-001",
+      firstName: "Test",
+      lastName: "Faculty",
+      departmentId: cse.id,
+    },
+  });
+
+  const testStudent = await prisma.user.upsert({
+    where: { email: "student_aia1@campusiq.com" },
+    update: {
+      name: "Test AIA-1 Student",
+      role: "STUDENT",
+      passwordHash,
+      departmentId: cse.id,
+    },
+    create: {
+      name: "Test AIA-1 Student",
+      email: "student_aia1@campusiq.com",
+      passwordHash,
+      role: "STUDENT",
+      departmentId: cse.id,
+    },
+  });
+
+  const testStudentProfile = await prisma.student.upsert({
+    where: { userId: testStudent.id },
+    update: {
+      rollNumber: "MIT-CSE-2024-TEST-0001",
+      firstName: "Test",
+      lastName: "Student",
+      classGroupId: aia1Class.id,
+      departmentId: cse.id,
+      admissionYear: 2024,
+    },
+    create: {
+      userId: testStudent.id,
+      rollNumber: "MIT-CSE-2024-TEST-0001",
+      firstName: "Test",
+      lastName: "Student",
+      classGroupId: aia1Class.id,
+      departmentId: cse.id,
+      admissionYear: 2024,
+    },
+  });
+
+  await seedAcademicTelemetry(
+    [
+      {
+        studentId: testStudentProfile.id,
+        attendanceRate: 0.62,
+        markMultiplier: 0.38,
+      },
+    ],
+    {
+      id: aia1Class.id,
+      year: aia1Class.year,
+      departmentId: aia1Class.departmentId,
+      specializationId: aia1Class.specializationId,
+    }
+  );
+
+  console.log(
+    `Database seed completed: ${studentsCreated} mock students across ${allClasses.length} classes, plus 4 role-switching test accounts.`
+  );
 }
 
 main()

@@ -6,6 +6,7 @@ import {
   ClipboardList,
   CalendarCheck,
   BrainCircuit,
+  BarChart3,
   LogOut,
   Settings,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const navItems = [
   { path: "/marks", label: "Marks", icon: ClipboardList, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { path: "/attendance", label: "Attendance", icon: CalendarCheck, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { path: "/ml-analysis", label: "ML Student Analysis", icon: BrainCircuit, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
+  { path: "/analytics", label: "AI Predictions Dashboard", icon: BarChart3, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY"] },
 ];
 
 function Sidebar() {

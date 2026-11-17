@@ -31,7 +31,7 @@ function App() {
           }
         >
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/analytics" element={<ProtectedRoute allowedRoles={["DEPT_ADMIN", "SUPERADMIN"]}><AnalyticsEngine /></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute allowedRoles={["FACULTY", "DEPT_ADMIN", "SUPERADMIN"]}><AnalyticsEngine /></ProtectedRoute>} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/students" element={<ProtectedRoute allowedRoles={STAFF_ROLES}><Students /></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute allowedRoles={STAFF_ROLES}><Attendance /></ProtectedRoute>} />

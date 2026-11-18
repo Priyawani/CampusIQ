@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "../services/api";
+import DeptAdminPredictionDashboard from "../components/DeptAdminPredictionDashboard";
 import { Button } from "@/components/ui/button";
+import { getUserRole } from "../utils/auth";
 import FilterHierarchy, { type HierarchyFilters } from "../components/FilterHierarchy";
 import {
   BarChart,
@@ -61,7 +63,18 @@ interface PredictionResponse {
 
 type ChartType = "bar" | "line" | "scatter";
 
+const EMPTY_PREDICTIONS: PredictionResponse = {
+  filters: { subjects: [] },
+  summary: {
+    studentsAnalyzed: 0,
+    atRiskCount: 0,
+    averageRiskProbability: 0,
+  },
+  charts: { bar: [], line: [], scatter: [] },
+};
+
 function AnalyticsEngine() {
+  const role = getUserRole();
   const [filters, setFilters] = useState<HierarchyFilters>({
     year: "",
     classGroupId: "",
@@ -69,9 +82,9 @@ function AnalyticsEngine() {
     subjectId: "",
   });
   const [chartType, setChartType] = useState<ChartType>("bar");
-  const [predictions, setPredictions] = useState<PredictionResponse | null>(null);
+  const [predictions, setPredictions] = useState<PredictionResponse>(EMPTY_PREDICTIONS);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const handleFiltersChange = useCallback((next: HierarchyFilters) => {
     setFilters(next);
@@ -81,18 +94,61 @@ function AnalyticsEngine() {
     let cancelled = false;
 
     const loadPredictions = async () => {
+      if (role === "DEPT_ADMIN") {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
       setLoading(true);
-      setError("");
+      setNotice("");
       try {
+        const token = localStorage.getItem("campusiq_token");
+        if (!token) {
+          if (!cancelled) {
+            setPredictions(EMPTY_PREDICTIONS);
+            setNotice("Please log in again to load prediction data.");
+          }
+          return;
+        }
+
         const params: Record<string, string> = {};
         if (filters.classGroupId) params.classGroupId = filters.classGroupId;
         if (filters.subjectId) params.subjectId = filters.subjectId;
 
-        const response = await api.get("/analytics/predictions", { params });
-        if (!cancelled) setPredictions(response.data);
+        const response = await api.get("/analytics/predictions", {
+          params,
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 10000,
+        });
+        const payload = response.data;
+        const next: PredictionResponse =
+          payload && typeof payload === "object" && !Array.isArray(payload)
+            ? {
+                filters: {
+                  subjects: Array.isArray(payload.filters?.subjects)
+                    ? payload.filters.subjects
+                    : [],
+                },
+                summary: {
+                  studentsAnalyzed: Number(payload.summary?.studentsAnalyzed ?? 0),
+                  atRiskCount: Number(payload.summary?.atRiskCount ?? 0),
+                  averageRiskProbability: Number(payload.summary?.averageRiskProbability ?? 0),
+                },
+                charts: {
+                  bar: Array.isArray(payload.charts?.bar) ? payload.charts.bar : [],
+                  line: Array.isArray(payload.charts?.line) ? payload.charts.line : [],
+                  scatter: Array.isArray(payload.charts?.scatter) ? payload.charts.scatter : [],
+                },
+              }
+            : EMPTY_PREDICTIONS;
+
+        if (!cancelled) setPredictions(next);
       } catch (loadError) {
         console.error("Failed to load predictions:", loadError);
-        if (!cancelled) setError("Failed to load prediction data.");
+        if (!cancelled) {
+          setPredictions(EMPTY_PREDICTIONS);
+          setNotice("No prediction data available for the selected filters.");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -102,7 +158,7 @@ function AnalyticsEngine() {
     return () => {
       cancelled = true;
     };
-  }, [filters.classGroupId, filters.subjectId]);
+  }, [filters.classGroupId, filters.subjectId, role]);
 
   const charts = predictions?.charts;
   const summary = predictions?.summary ?? {
@@ -195,6 +251,10 @@ function AnalyticsEngine() {
     }
   };
 
+  if (role === "DEPT_ADMIN") {
+    return <DeptAdminPredictionDashboard />;
+  }
+
   return (
     <div className="p-4 space-y-4">
       <FilterHierarchy value={filters} onChange={handleFiltersChange} />
@@ -230,7 +290,7 @@ function AnalyticsEngine() {
         </div>
       </div>
 
-      {error && <div className="text-sm text-rose-600">{error}</div>}
+      {notice && <div role="status" className="text-sm text-amber-700">{notice}</div>}
       {loading && <div className="text-sm text-slate-500">Loading prediction data...</div>}
 
       <div className="bg-white border border-slate-200 rounded-lg p-4">

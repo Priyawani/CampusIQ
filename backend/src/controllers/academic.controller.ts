@@ -53,17 +53,43 @@ async function getOwnStudentId(userId: number): Promise<number | null> {
 }
 
 /**
- * Read guard: ADMIN/FACULTY may read any student's records, while a STUDENT
- * may only read their own. Returns true when the request is allowed.
+ * Read guard: ADMIN/FACULTY may read any student's records, DEPT_ADMIN may
+ * read students inside their own department, and a STUDENT may only read
+ * their own records. Returns true when the request is allowed.
  */
 async function canReadStudentRecord(req: AuthRequest, studentId: number): Promise<boolean> {
   if (!req.user) return false;
   if (WRITE_ROLES.includes(req.user.role) || req.user.role === "ADMIN") return true;
+  if (req.user.role === "DEPT_ADMIN") {
+    if (req.user.departmentId == null) return false;
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: {
+        departmentId: true,
+        classGroup: { select: { departmentId: true } },
+      },
+    });
+    if (!student) return false;
+    return (
+      student.departmentId === req.user.departmentId ||
+      student.classGroup?.departmentId === req.user.departmentId
+    );
+  }
   if (req.user.role === "STUDENT") {
     const ownId = await getOwnStudentId(req.user.userId);
     return ownId === studentId;
   }
   return false;
+}
+
+/**
+ * DEPT_ADMIN callers only see rows owned by their department. Other staff
+ * roles keep their existing campus-wide read access.
+ */
+function canReadDepartmentResource(req: AuthRequest, resourceDepartmentId: number): boolean {
+  if (!req.user) return false;
+  if (req.user.role !== "DEPT_ADMIN") return true;
+  return req.user.departmentId != null && req.user.departmentId === resourceDepartmentId;
 }
 
 /** Find-or-create the enrollment that ties a student to a subject. */
@@ -90,10 +116,18 @@ async function resolveEnrollment(studentId: number, subjectId: number) {
 // SUBJECTS
 // ===============================
 
-/** GET /subjects — any authenticated user. */
-export async function listSubjects(_req: Request, res: Response) {
+/** GET /subjects — any authenticated user; DEPT_ADMIN sees their department only. */
+export async function listSubjects(req: AuthRequest, res: Response) {
   try {
+    const departmentFilter =
+      req.user?.role === "DEPT_ADMIN"
+        ? req.user.departmentId == null
+          ? { id: -1 }
+          : { id: req.user.departmentId }
+        : undefined;
+
     const subjects = await prisma.subject.findMany({
+      where: departmentFilter ? { department: departmentFilter } : undefined,
       include: {
         department: true,
         classGroups: { select: { id: true } },
@@ -110,6 +144,7 @@ export async function listSubjects(_req: Request, res: Response) {
         credits: s.credits,
         year: s.year,
         department: s.department.code,
+        departmentId: s.departmentId,
         specializationId: s.specializationId,
         classGroupIds: s.classGroups.map((classGroup) => classGroup.id),
       }))
@@ -120,8 +155,8 @@ export async function listSubjects(_req: Request, res: Response) {
   }
 }
 
-/** GET /subjects/:id — any authenticated user. */
-export async function getSubjectById(req: Request, res: Response) {
+/** GET /subjects/:id — any authenticated user; DEPT_ADMIN is department-scoped. */
+export async function getSubjectById(req: AuthRequest, res: Response) {
   try {
     const id = parseId(req.params.id);
     if (id === null) {
@@ -135,6 +170,10 @@ export async function getSubjectById(req: Request, res: Response) {
 
     if (!subject) {
       return res.status(404).json({ message: "Subject not found" });
+    }
+
+    if (!canReadDepartmentResource(req, subject.departmentId)) {
+      return res.status(403).json({ message: "You do not have permission to access this resource" });
     }
 
     res.json({
@@ -207,7 +246,15 @@ export async function updateSubject(req: Request, res: Response) {
       return res.status(400).json({ message: "Invalid subject ID" });
     }
 
-    const { code, courseCode, abbreviation, name, credits, department } = req.body;
+    const {
+      code,
+      courseCode,
+      abbreviation,
+      name,
+      credits,
+      department,
+      specializationId: rawSpecializationId,
+    } = req.body;
 
     let departmentId: number | undefined;
     if (department) {
@@ -220,6 +267,30 @@ export async function updateSubject(req: Request, res: Response) {
       departmentId = dept.id;
     }
 
+    let specializationId: number | null | undefined;
+    if (rawSpecializationId !== undefined) {
+      if (
+        rawSpecializationId === null ||
+        rawSpecializationId === "" ||
+        rawSpecializationId === "null"
+      ) {
+        specializationId = null;
+      } else {
+        const parsedSpecializationId = parseId(rawSpecializationId);
+        if (parsedSpecializationId === null) {
+          return res.status(400).json({ message: "Invalid specializationId" });
+        }
+        const specialization = await prisma.specialization.findUnique({
+          where: { id: parsedSpecializationId },
+          select: { id: true },
+        });
+        if (!specialization) {
+          return res.status(404).json({ message: "Specialization not found" });
+        }
+        specializationId = specialization.id;
+      }
+    }
+
     const subject = await prisma.subject.update({
       where: { id },
       data: {
@@ -228,6 +299,7 @@ export async function updateSubject(req: Request, res: Response) {
         ...(name ? { name } : {}),
         ...(credits !== undefined ? { credits: parseInt(credits, 10) } : {}),
         ...(departmentId !== undefined ? { departmentId } : {}),
+        ...(specializationId !== undefined ? { specializationId } : {}),
       },
     });
 
@@ -316,7 +388,7 @@ export async function getMarksByStudent(req: AuthRequest, res: Response) {
  * where averageScore is the mean percentage (marksObtained / maxMarks * 100)
  * rounded to 1 decimal, ordered by the canonical EXAM_TYPES order.
  */
-export async function getMarksBySubject(req: Request, res: Response) {
+export async function getMarksBySubject(req: AuthRequest, res: Response) {
   try {
     const subjectId = parseId(req.params.id);
     if (subjectId === null) {
@@ -326,6 +398,10 @@ export async function getMarksBySubject(req: Request, res: Response) {
     const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
     if (!subject) {
       return res.status(404).json({ message: "Subject not found" });
+    }
+
+    if (!canReadDepartmentResource(req, subject.departmentId)) {
+      return res.status(403).json({ message: "You do not have permission to access this resource" });
     }
 
     // Optional multi-class/batch filter: ?className=TY-B
@@ -666,6 +742,61 @@ export async function getAttendanceByStudent(req: AuthRequest, res: Response) {
   }
 }
 
+export async function getDailyAttendance(req: AuthRequest, res: Response) {
+  try {
+    const subjectId = parseId(req.query.subjectId);
+    if (subjectId === null) {
+      return res.status(400).json({ message: "A valid subjectId query parameter is required" });
+    }
+
+    const date = typeof req.query.date === "string" ? req.query.date : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res
+        .status(400)
+        .json({ message: "A valid date query parameter is required (YYYY-MM-DD)" });
+    }
+
+    const dayStart = new Date(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(dayStart.getTime())) {
+      return res.status(400).json({ message: "Invalid date" });
+    }
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+
+    const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
+    if (!subject) {
+      return res.status(404).json({ message: "Subject not found" });
+    }
+    if (!canReadDepartmentResource(req, subject.departmentId)) {
+      return res.status(403).json({ message: "You do not have permission to access this resource" });
+    }
+
+    const records = await prisma.attendance.findMany({
+      where: {
+        date: { gte: dayStart, lt: dayEnd },
+        enrollment: { subjectId },
+      },
+      select: {
+        status: true,
+        enrollment: { select: { studentId: true } },
+      },
+    });
+
+    const statuses: Record<string, string> = {};
+    for (const record of records) {
+      const studentId = record.enrollment.studentId;
+      if (await canReadStudentRecord(req, studentId)) {
+        statuses[String(studentId)] = record.status;
+      }
+    }
+
+    return res.status(200).json({ date, subjectId, statuses });
+  } catch (error) {
+    console.error("Error fetching daily attendance:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+}
+
 /**
  * GET /attendance/monthly-report?subjectId=:id&month=YYYY-MM[&className=:name]
  * Staff only (enforced in the router).
@@ -678,7 +809,7 @@ export async function getAttendanceByStudent(req: AuthRequest, res: Response) {
  * Students enrolled in the subject but with no records that month are
  * included with zero counts.
  */
-export async function getMonthlyAttendanceReport(req: Request, res: Response) {
+export async function getMonthlyAttendanceReport(req: AuthRequest, res: Response) {
   try {
     const subjectId = parseId(req.query.subjectId);
     if (subjectId === null) {
@@ -696,6 +827,10 @@ export async function getMonthlyAttendanceReport(req: Request, res: Response) {
     const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
     if (!subject) {
       return res.status(404).json({ message: "Subject not found" });
+    }
+
+    if (!canReadDepartmentResource(req, subject.departmentId)) {
+      return res.status(403).json({ message: "You do not have permission to access this resource" });
     }
 
     const year = Number(monthMatch[1]);

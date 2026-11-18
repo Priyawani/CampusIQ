@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
+  CalendarDays,
   Users,
   BookOpen,
   ClipboardList,
@@ -14,10 +15,11 @@ import { clearAuth, getUserRole } from "../utils/auth";
 
 const navItems = [
   { path: "/dashboard", label: "360 Dashboard", icon: LayoutDashboard, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "STUDENT", "ADMIN"] },
+  { path: "/timetable", label: "Timetable", icon: CalendarDays, roles: ["DEPT_ADMIN", "SUPERADMIN"] },
   { path: "/students", label: "Students", icon: Users, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { path: "/subjects", label: "Subjects", icon: BookOpen, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
-  { path: "/marks", label: "Marks", icon: ClipboardList, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
-  { path: "/attendance", label: "Attendance", icon: CalendarCheck, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
+  { path: "/marks", label: "Marks", icon: ClipboardList, roles: ["DEPT_ADMIN", "FACULTY", "ADMIN"] },
+  { path: "/attendance", label: "Attendance", icon: CalendarCheck, roles: ["DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { path: "/ml-analysis", label: "ML Student Analysis", icon: BrainCircuit, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { path: "/analytics", label: "AI Predictions Dashboard", icon: BarChart3, roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY"] },
 ];

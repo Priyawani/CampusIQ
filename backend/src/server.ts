@@ -5,12 +5,15 @@ import analyticsRoutes from "./routes/analytics.routes.js";
 import academicRoutes from "./routes/academic.routes.js";
 import enrollmentRoutes from "./routes/enrollment.routes.js";
 import facultyRoutes from "./routes/faculty.routes.js";
-import studentRoutes from "./routes/student.routes.js";
+import timetableRoutes from "./routes/timetable.routes.js";
+import studentRoutes, { listClassGroups } from "./routes/student.routes.js";
 import departmentRoutes from "./routes/department.routes.js";
 import express, { Request, Response } from "express";
 import authRoutes from "./routes/auth.routes.js";
 import testRoutes from "./routes/test.routes.js";
+import { authenticateToken } from "./middleware/auth.middleware.js";
 import { initAttendanceCron } from "./jobs/attendanceCron.js";
+import { initLectureAlerts } from "./jobs/lectureAlerts.js";
 const app = express();
 
 const PORT = Number(process.env.PORT) || 5000;
@@ -39,9 +42,12 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api", academicRoutes);
 app.use("/api/students", studentRoutes);
+app.get("/api/class-groups", authenticateToken, listClassGroups);
 app.use("/api/faculty", facultyRoutes);
+app.use("/api/timetable", timetableRoutes);
 app.use("/api/enrollments", enrollmentRoutes);
 initAttendanceCron();
+initLectureAlerts();
 
 app.listen(PORT, () => {
   console.log(`CampusIQ Backend running on http://localhost:${PORT}`);

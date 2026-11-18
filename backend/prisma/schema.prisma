@@ -49,6 +49,10 @@ model User {
   studentProfile Student?
   faculty        Faculty?
 
+  timetables            Timetable[]
+  requestedSubstitutes  SubstituteRequest[] @relation("RequestingFaculty")
+  assignedSubstitutes   SubstituteRequest[] @relation("AssignedFaculty")
+
   @@index([departmentId])
 }
 
@@ -89,6 +93,7 @@ model ClassGroup {
   students         Student[]
   faculties        User[]          @relation("FacultyClasses")
   subjects         Subject[]
+  timetables       Timetable[]
   createdAt        DateTime        @default(now())
 
   @@unique([name, departmentId])
@@ -147,6 +152,7 @@ model Subject {
   specialization Specialization? @relation(fields: [specializationId], references: [id])
   classGroups    ClassGroup[]
   enrollments    Enrollment[]
+  timetables     Timetable[]
 
   @@index([departmentId, year])
   @@index([specializationId])
@@ -201,4 +207,52 @@ model MLPrediction {
 
   @@index([isAtRisk])
   @@index([lastCalculated])
+}
+
+model Timetable {
+  id           Int        @id @default(autoincrement())
+  facultyId    Int
+  faculty      User       @relation(fields: [facultyId], references: [id])
+  classGroupId Int
+  classGroup   ClassGroup @relation(fields: [classGroupId], references: [id])
+  subjectId    Int
+  subject      Subject    @relation(fields: [subjectId], references: [id])
+  dayOfWeek    Int
+  startTime    String
+  endTime      String
+  roomNumber   String
+
+  lessonResources    LessonResource[]
+  substituteRequests SubstituteRequest[]
+
+  @@index([facultyId, dayOfWeek])
+  @@index([classGroupId])
+  @@index([subjectId])
+}
+
+model SubstituteRequest {
+  id                  Int       @id @default(autoincrement())
+  timetableId         Int
+  timetable           Timetable @relation(fields: [timetableId], references: [id])
+  requestingFacultyId Int
+  requestingFaculty   User      @relation("RequestingFaculty", fields: [requestingFacultyId], references: [id])
+  assignedFacultyId   Int?
+  assignedFaculty     User?     @relation("AssignedFaculty", fields: [assignedFacultyId], references: [id])
+  status              String    @default("PENDING")
+  date                DateTime
+  createdAt           DateTime  @default(now())
+
+  @@index([timetableId])
+  @@index([requestingFacultyId])
+  @@index([status])
+}
+
+model LessonResource {
+  id           Int       @id @default(autoincrement())
+  timetableId  Int
+  timetable    Timetable @relation(fields: [timetableId], references: [id])
+  resourceLink String
+  title        String
+
+  @@index([timetableId])
 }

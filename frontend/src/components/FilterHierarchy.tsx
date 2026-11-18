@@ -58,25 +58,33 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
   const [allClasses, setAllClasses] = useState<ClassOption[]>([]);
   const [assignedClassIds, setAssignedClassIds] = useState<number[] | null>(null);
   const [subjects, setSubjects] = useState<SubjectOption[]>([]);
-  const [selectedYear, setSelectedYear] = useState(
-    value.year || String(YEAR_OPTIONS[0].value)
+  const [selectedYear, setSelectedYear] = useState<number>(
+    value.year ? Number(value.year) : YEAR_OPTIONS[0].value
   );
-  const [selectedClass, setSelectedClass] = useState(value.classGroupId);
+  const [selectedClass, setSelectedClass] = useState<number | "">(
+    value.classGroupId ? Number(value.classGroupId) : ""
+  );
   const [selectedSpecialization, setSelectedSpecialization] = useState(
     value.specializationId || "general"
   );
   const [selectedSubject, setSelectedSubject] = useState(value.subjectId);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const loadOptions = async () => {
+    const fetchData = async () => {
+      setLoading(true);
+      setLoadError(false);
       try {
+        if (!localStorage.getItem("campusiq_token")) {
+          setLoadError(true);
+          return;
+        }
+
         const [profileResponse, classResponse, subjectResponse] = await Promise.all([
-          api.get("/auth/me"),
-          api.get("/students/class-groups"),
-          api.get("/subjects"),
+          api.get("/auth/me", { timeout: 10000 }),
+          api.get("/students/class-groups", { timeout: 10000 }),
+          api.get("/subjects", { timeout: 10000 }),
         ]);
 
         const profile = profileResponse.data;
@@ -93,26 +101,23 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
             : fetchedClasses;
         const firstClass = sortClasses(scopedClasses)[0];
 
-        if (cancelled) return;
         setAllClasses(fetchedClasses);
         setAssignedClassIds(profile.role === "FACULTY" ? assignedClasses : null);
         setSubjects(Array.isArray(subjectResponse.data) ? subjectResponse.data : []);
         if (firstClass && !initialFiltersRef.current.classGroupId) {
-          setSelectedYear(String(firstClass.year));
-          setSelectedClass(String(firstClass.id));
+          setSelectedYear(firstClass.year);
+          setSelectedClass(firstClass.id);
           setSelectedSpecialization(normalizeSpecialization(firstClass.specializationId));
         }
       } catch (error) {
         console.error("Failed to load filter hierarchy:", error);
+        setLoadError(true);
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     };
 
-    loadOptions();
-    return () => {
-      cancelled = true;
-    };
+    fetchData();
   }, []);
 
   const visibleClasses = useMemo(
@@ -126,32 +131,31 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
   const filteredClasses = useMemo(
     () =>
       sortClasses(
-        visibleClasses.filter((classGroup) => classGroup.year === Number(selectedYear))
+        visibleClasses.filter((classGroup) => classGroup.year === selectedYear)
       ),
     [visibleClasses, selectedYear]
   );
 
-  useEffect(() => {
-    const classGroup = allClasses.find((item) => String(item.id) === selectedClass);
-    setSelectedSpecialization(normalizeSpecialization(classGroup?.specializationId));
-  }, [allClasses, selectedClass]);
+  const selectedClassGroup = allClasses.find(
+    (classGroup) => classGroup.id === selectedClass
+  );
+
+  const effectiveSpecialization = selectedClassGroup
+    ? normalizeSpecialization(selectedClassGroup.specializationId)
+    : selectedSpecialization;
 
   useEffect(() => {
     onChange({
-      year: selectedYear,
-      classGroupId: selectedClass,
-      specializationId: selectedSpecialization,
+      year: String(selectedYear),
+      classGroupId: selectedClass === "" ? "" : String(selectedClass),
+      specializationId: effectiveSpecialization,
       subjectId: selectedSubject,
     });
-  }, [selectedYear, selectedClass, selectedSpecialization, selectedSubject, onChange]);
-
-  const selectedClassGroup = allClasses.find(
-    (classGroup) => String(classGroup.id) === selectedClass
-  );
+  }, [selectedYear, selectedClass, effectiveSpecialization, selectedSubject, onChange]);
 
   const specializationLabel = !selectedClassGroup
     ? "—"
-    : selectedSpecialization === "general"
+    : effectiveSpecialization === "general"
       ? "Foundation / Common Core"
       : (selectedClassGroup.specialization?.name ?? "Foundation / Common Core");
 
@@ -172,35 +176,37 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
     });
   }, [subjects, selectedClassGroup]);
 
-  const handleYearChange = (year: string) => {
-    const firstClass = sortClasses(
-      visibleClasses.filter((classGroup) => classGroup.year === Number(year))
-    )[0];
-
+  const handleYearChange = (year: number) => {
     setSelectedYear(year);
-    setSelectedClass(firstClass ? String(firstClass.id) : "");
+    setSelectedClass("");
+    setSelectedSpecialization("");
     setSelectedSubject("");
   };
 
-  const handleClassChange = (classGroupId: string) => {
+  const handleClassChange = (classGroupId: number | "") => {
     setSelectedClass(classGroupId);
     setSelectedSubject("");
   };
 
   const selectClass = "border rounded px-2 py-1 text-sm";
+  const dropdownWrapperClass = "relative z-10 flex items-center gap-1 text-xs text-slate-500";
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg p-3 flex flex-wrap items-center gap-3">
+    <div className="relative z-10 bg-white border border-slate-200 rounded-lg p-3 flex flex-wrap items-center gap-3">
       <span className="text-sm font-semibold text-slate-700 mr-2">
         Filter Hierarchy
       </span>
-      <label className="text-xs text-slate-500 flex items-center gap-1">
+      {loadError && !loading && (
+        <span role="status" className="text-xs font-medium text-amber-700">
+          Using default filters — some options could not be loaded.
+        </span>
+      )}
+      <label className={dropdownWrapperClass}>
         Year
         <select
           className={selectClass}
           value={selectedYear}
-          disabled={loading}
-          onChange={(event) => handleYearChange(event.target.value)}
+          onChange={(event) => handleYearChange(Number(event.target.value))}
         >
           {YEAR_OPTIONS.map((year) => (
             <option key={year.value} value={year.value}>
@@ -209,13 +215,15 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
           ))}
         </select>
       </label>
-      <label className="text-xs text-slate-500 flex items-center gap-1">
+      <label className={dropdownWrapperClass}>
         Class
         <select
           className={selectClass}
           value={selectedClass}
-          disabled={filteredClasses.length === 0}
-          onChange={(event) => handleClassChange(event.target.value)}
+          disabled={!selectedYear}
+          onChange={(event) =>
+            handleClassChange(event.target.value ? Number(event.target.value) : "")
+          }
         >
           <option value="">Select class</option>
           {filteredClasses.map((classGroup) => (
@@ -231,7 +239,7 @@ function FilterHierarchy({ value, onChange }: FilterHierarchyProps) {
           {specializationLabel}
         </span>
       </div>
-      <label className="text-xs text-slate-500 flex items-center gap-1">
+      <label className={dropdownWrapperClass}>
         Subject
         <select
           className={selectClass}

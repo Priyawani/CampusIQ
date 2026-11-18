@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import DeptAdminPredictionDashboard from "../components/DeptAdminPredictionDashboard";
+import SuperAdminPredictionDashboard from "../components/SuperAdminPredictionDashboard";
+import { getUserRole } from "../utils/auth";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -25,7 +28,7 @@ interface PredictionResult {
   factors: string[];
 }
 
-function AIPredictions() {
+function FacultyPerformancePrediction() {
   const { toast } = useToast();
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
@@ -177,6 +180,20 @@ function AIPredictions() {
       </div>
     </>
   );
+}
+
+function AIPredictions() {
+  const role = getUserRole();
+
+  if (role === "SUPERADMIN") {
+    return <SuperAdminPredictionDashboard />;
+  }
+
+  if (role === "DEPT_ADMIN") {
+    return <DeptAdminPredictionDashboard />;
+  }
+
+  return <FacultyPerformancePrediction />;
 }
 
 export default AIPredictions;

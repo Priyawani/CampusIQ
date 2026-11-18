@@ -1,6 +1,8 @@
 import express, { Request, Response } from "express";
 import bcrypt from "bcryptjs";
+import type { Prisma } from "../generated/prisma/client.js";
 import prisma from "../lib/prisma.js";
+import { AuthRequest, authenticateToken } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
@@ -8,7 +10,7 @@ const router = express.Router();
 // GET ALL STUDENTS (Formatted for the frontend)
 // Supports an optional `?classGroupId=` filter for multi-class/batch routing.
 // ===============================
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const classGroupIdParam = req.query.classGroupId;
     const classGroupId =
@@ -20,8 +22,53 @@ router.get("/", async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Invalid classGroupId" });
     }
 
+    const role = req.user?.role;
+    let where: Prisma.StudentWhereInput = {};
+
+    if (role === "SUPERADMIN") {
+      where = {};
+    } else if (role === "DEPT_ADMIN") {
+      if (req.user?.departmentId == null) {
+        return res.status(403).json({ message: "Department context required" });
+      }
+      where = {
+        OR: [
+          { departmentId: req.user.departmentId },
+          { classGroup: { departmentId: req.user.departmentId } },
+        ],
+      };
+    } else if (role === "FACULTY") {
+      where = {
+        classGroup: { faculties: { some: { id: req.user!.userId } } },
+      };
+    } else {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (classGroupId !== undefined) {
+      if (role === "SUPERADMIN") {
+        where = { ...where, classGroupId };
+      } else if (role === "DEPT_ADMIN") {
+        where = {
+          AND: [
+            where,
+            { classGroupId },
+            { classGroup: { departmentId: req.user!.departmentId! } },
+          ],
+        };
+      } else if (role === "FACULTY") {
+        where = {
+          AND: [
+            where,
+            { classGroupId },
+            { classGroup: { faculties: { some: { id: req.user!.userId } } } },
+          ],
+        };
+      }
+    }
+
     const students = await prisma.student.findMany({
-      where: classGroupId !== undefined ? { classGroupId } : undefined,
+      where,
       include: {
         user: true,
         classGroup: {
@@ -76,7 +123,7 @@ router.get("/", async (req: Request, res: Response) => {
 // ===============================
 // GET CLASS GROUPS (for dropdowns)
 // ===============================
-router.get("/class-groups", async (req: Request, res: Response) => {
+export const listClassGroups = async (req: AuthRequest, res: Response) => {
   try {
     const parseNumberParam = (value: unknown) => {
       if (typeof value !== "string") return undefined;
@@ -87,7 +134,11 @@ router.get("/class-groups", async (req: Request, res: Response) => {
       return Number.isFinite(parsed) ? parsed : undefined;
     };
 
-    const departmentId = parseNumberParam(req.query.departmentId);
+    const role = req.user?.role;
+    const userId = req.user?.userId;
+    const departmentId = req.user?.departmentId ?? null;
+
+    const queryDepartmentId = parseNumberParam(req.query.departmentId);
     const year = parseNumberParam(req.query.year);
     const rawSpecializationId = req.query.specializationId;
     const specializationId =
@@ -96,12 +147,41 @@ router.get("/class-groups", async (req: Request, res: Response) => {
         ? null
         : parseNumberParam(rawSpecializationId);
 
+    const filters: Prisma.ClassGroupWhereInput = {
+      ...(year !== undefined ? { year } : {}),
+      ...(specializationId !== undefined ? { specializationId } : {}),
+    };
+
+    let where: Prisma.ClassGroupWhereInput;
+    if (role === "SUPERADMIN") {
+      where = {
+        ...filters,
+        ...(queryDepartmentId !== undefined
+          ? { departmentId: queryDepartmentId }
+          : {}),
+      };
+    } else if (role === "DEPT_ADMIN") {
+      if (departmentId == null) {
+        return res.status(403).json({ message: "Department context required" });
+      }
+      where = { ...filters, departmentId };
+    } else if (role === "FACULTY") {
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      where = {
+        ...filters,
+        faculties: { some: { id: userId } },
+        ...(queryDepartmentId !== undefined
+          ? { departmentId: queryDepartmentId }
+          : {}),
+      };
+    } else {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
     const classGroups = await prisma.classGroup.findMany({
-      where: {
-        ...(departmentId !== undefined ? { departmentId } : {}),
-        ...(year !== undefined ? { year } : {}),
-        ...(specializationId !== undefined ? { specializationId } : {}),
-      },
+      where,
       orderBy: { name: "asc" },
       include: {
         department: { select: { id: true, code: true, name: true } },
@@ -109,12 +189,14 @@ router.get("/class-groups", async (req: Request, res: Response) => {
       },
     });
 
-    return res.json(classGroups);
+    return res.status(200).json(classGroups);
   } catch (error) {
     console.error("Error fetching class groups:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
-});
+};
+
+router.get("/class-groups", authenticateToken, listClassGroups);
 
 // ===============================
 // GET SPECIALIZATIONS (for dropdowns)

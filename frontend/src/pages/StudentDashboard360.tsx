@@ -1,14 +1,24 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
-import { Users, BookOpen, ClipboardList, CalendarCheck, BrainCircuit, LayoutDashboard } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Users, BookOpen, ClipboardList, CalendarCheck, BrainCircuit, LayoutDashboard, FileText, ExternalLink } from "lucide-react";
 import FilterHierarchy, { type HierarchyFilters } from "../components/FilterHierarchy";
+import api from "../services/api";
 import { getUserRole } from "../utils/auth";
+
+interface LessonResourceView {
+  id: number;
+  title: string;
+  resourceLink: string;
+  subjectCode: string | null;
+  subjectName: string | null;
+}
 
 const adminModules = [
   { to: "/students", title: "Students", desc: "Directory & enrollment (SOC 1–24, AIA/Core/Cyber)", icon: Users, color: "bg-indigo-600", roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { to: "/subjects", title: "Subjects", desc: "Curriculum & course catalog", icon: BookOpen, color: "bg-blue-600", roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
-  { to: "/marks", title: "Marks", desc: "Continuous assessment entry", icon: ClipboardList, color: "bg-purple-600", roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
-  { to: "/attendance", title: "Attendance", desc: "Daily tracking, monthly XLSX, parent alerts", icon: CalendarCheck, color: "bg-teal-600", roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
+  { to: "/marks", title: "Marks", desc: "Continuous assessment entry", icon: ClipboardList, color: "bg-purple-600", roles: ["DEPT_ADMIN", "FACULTY", "ADMIN"] },
+  { to: "/attendance", title: "Attendance", desc: "Daily tracking, monthly XLSX, parent alerts", icon: CalendarCheck, color: "bg-teal-600", roles: ["DEPT_ADMIN", "FACULTY", "ADMIN"] },
   { to: "/ml-analysis", title: "ML Student Analysis", desc: "CatBoost risk predictions (Tableau view)", icon: BrainCircuit, color: "bg-rose-600", roles: ["SUPERADMIN", "DEPT_ADMIN", "FACULTY", "ADMIN"] },
 ];
 
@@ -31,6 +41,15 @@ function StudentDashboard360() {
     setFilters(next);
   }, []);
   const cards = role === "STUDENT" ? studentModules : adminModules.filter((m) => m.roles.includes(role));
+
+  const { data: resources, isLoading: resourcesLoading } = useQuery({
+    queryKey: ["lessonResources", "my-class"],
+    queryFn: async (): Promise<LessonResourceView[]> => {
+      const response = await api.get("/timetable/resources");
+      return Array.isArray(response.data) ? (response.data as LessonResourceView[]) : [];
+    },
+    refetchInterval: 15_000,
+  });
 
   return (
     <div className="p-6 space-y-6">
@@ -63,6 +82,37 @@ function StudentDashboard360() {
             </div>
           </Link>
         ))}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="flex items-center gap-2 font-semibold text-slate-900">
+            <FileText className="h-4 w-4 text-indigo-600" /> Lesson Resources
+          </h2>
+          <span className="text-xs text-slate-500">Shared by faculty for this class</span>
+        </div>
+        {resourcesLoading ? (
+          <p className="text-sm text-slate-500">Loading resources...</p>
+        ) : resources && resources.length > 0 ? (
+          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {resources.map((resource) => (
+              <li key={resource.id} className="rounded-lg border border-slate-200 p-3 hover:bg-slate-50">
+                <a href={resource.resourceLink} target="_blank" rel="noreferrer" className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{resource.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {resource.subjectCode ? `${resource.subjectCode} · ` : ""}
+                      {resource.subjectName ?? "Class material"}
+                    </p>
+                  </div>
+                  <ExternalLink className="h-4 w-4 shrink-0 text-indigo-600" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-slate-500">No resources shared yet.</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

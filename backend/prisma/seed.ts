@@ -41,6 +41,20 @@ const MARK_TEMPLATES = [
   { examType: "ASSIGNMENT" as const, maxMarks: 10 },
   { examType: "INTERNAL" as const, maxMarks: 50 },
 ];
+const HIGH_RISK_ATTENDANCE_DAYS = 100;
+const HIGH_RISK_ATTENDANCE_DATES = Array.from(
+  { length: HIGH_RISK_ATTENDANCE_DAYS },
+  (_, index) => {
+    const date = new Date("2025-07-01T00:00:00.000Z");
+    date.setUTCDate(date.getUTCDate() + index);
+    return date;
+  }
+);
+const HIGH_RISK_SHAP_DRIVERS = [
+  { feature: "Attendance < 75%", impact: -0.45 },
+  { feature: "CA Marks < 12", impact: -0.32 },
+  { feature: "Missed Lab Submissions", impact: -0.14 },
+] as const;
 
 const CSE_SUBJECTS = [
   { code: "MATH101", name: "Engineering Mathematics-I", year: 1, specializationName: null },
@@ -62,6 +76,82 @@ const CSE_SUBJECTS = [
   { code: "COR401", name: "System Design", year: 4, specializationName: "Core" },
   { code: "COR402", name: "Cloud Computing", year: 4, specializationName: "Core" },
 ] as const;
+
+interface HighRiskStudentSpec {
+  fullName: string;
+  rollNumber: string;
+  className: string;
+  attendancePercent: number;
+  caMarks: number;
+  riskScore: number;
+}
+
+const HIGH_RISK_SAMPLE_STUDENTS: HighRiskStudentSpec[] = [
+  {
+    fullName: "Aarav Kulkarni",
+    rollNumber: "MITU22BTCS0101",
+    className: "AIA - 1",
+    attendancePercent: 54,
+    caMarks: 9,
+    riskScore: 0.92,
+  },
+  {
+    fullName: "Sneha Deshmukh",
+    rollNumber: "MITU22BTCS0102",
+    className: "AIA - 1",
+    attendancePercent: 58,
+    caMarks: 11,
+    riskScore: 0.88,
+  },
+  {
+    fullName: "Rohan Patil",
+    rollNumber: "MITU22BTCS0205",
+    className: "AIA - 2",
+    attendancePercent: 61,
+    caMarks: 10,
+    riskScore: 0.85,
+  },
+  {
+    fullName: "Priya Joshi",
+    rollNumber: "MITU22BTCS0309",
+    className: "AIA - 3",
+    attendancePercent: 49,
+    caMarks: 8,
+    riskScore: 0.95,
+  },
+  {
+    fullName: "Kabir Sharma",
+    rollNumber: "MITU22BTCS0412",
+    className: "Core - 1",
+    attendancePercent: 63,
+    caMarks: 12,
+    riskScore: 0.81,
+  },
+  {
+    fullName: "Ananya Nair",
+    rollNumber: "MITU22BTCS0518",
+    className: "Cyber - 1",
+    attendancePercent: 52,
+    caMarks: 10,
+    riskScore: 0.91,
+  },
+  {
+    fullName: "Siddharth Verma",
+    rollNumber: "MITU24BTCS0014",
+    className: "SOC - 1",
+    attendancePercent: 57,
+    caMarks: 9,
+    riskScore: 0.89,
+  },
+  {
+    fullName: "Meera Iyer",
+    rollNumber: "MITU24BTCS0029",
+    className: "SOC - 2",
+    attendancePercent: 64,
+    caMarks: 11,
+    riskScore: 0.79,
+  },
+];
 
 function generateEnrollmentNumber(
   departmentCode: string,
@@ -286,6 +376,148 @@ async function seedAcademicTelemetry(
   }
 }
 
+async function seedHighRiskSampleStudents(departmentId: number) {
+  const passwordHash = await bcrypt.hash("password123", 10);
+  const rollNumbers = HIGH_RISK_SAMPLE_STUDENTS.map((student) => student.rollNumber);
+  const emailFor = (rollNumber: string) => `${rollNumber.toLowerCase()}@student.campusiq.com`;
+
+  for (const spec of HIGH_RISK_SAMPLE_STUDENTS) {
+    const classGroup = await prisma.classGroup.findUniqueOrThrow({
+      where: { name_departmentId: { name: spec.className, departmentId } },
+      select: {
+        id: true,
+        year: true,
+        departmentId: true,
+        specializationId: true,
+      },
+    });
+    const { firstName, lastName } = splitFullName(spec.fullName);
+    const email = emailFor(spec.rollNumber);
+
+    const user = await prisma.user.upsert({
+      where: { email },
+      update: {
+        name: spec.fullName,
+        role: "STUDENT",
+        passwordHash,
+        departmentId,
+      },
+      create: {
+        name: spec.fullName,
+        email,
+        passwordHash,
+        role: "STUDENT",
+        departmentId,
+      },
+    });
+
+    const student = await prisma.student.upsert({
+      where: { rollNumber: spec.rollNumber },
+      update: {
+        userId: user.id,
+        firstName,
+        lastName,
+        phone: `+91-90000${spec.rollNumber.slice(-4)}`,
+        admissionYear: classGroup.year === 1 ? 2024 : 2022,
+        classGroupId: classGroup.id,
+        departmentId,
+      },
+      create: {
+        userId: user.id,
+        rollNumber: spec.rollNumber,
+        firstName,
+        lastName,
+        phone: `+91-90000${spec.rollNumber.slice(-4)}`,
+        admissionYear: classGroup.year === 1 ? 2024 : 2022,
+        classGroupId: classGroup.id,
+        departmentId,
+      },
+    });
+
+    const subjects = await ensureClassSubjects(classGroup);
+    const subjectIds = subjects.map((subject) => subject.id);
+    await prisma.enrollment.createMany({
+      data: subjectIds.map((subjectId) => ({
+        studentId: student.id,
+        subjectId,
+        semester: classGroup.year,
+        academicYear: ACADEMIC_YEAR,
+      })),
+      skipDuplicates: true,
+    });
+
+    const enrollments = await prisma.enrollment.findMany({
+      where: {
+        studentId: student.id,
+        subjectId: { in: subjectIds },
+        semester: classGroup.year,
+        academicYear: ACADEMIC_YEAR,
+      },
+      select: { id: true },
+    });
+    const enrollmentIds = enrollments.map((enrollment) => enrollment.id);
+    if (enrollmentIds.length === 0) {
+      throw new Error(`No enrollments found for high-risk student ${spec.rollNumber}`);
+    }
+
+    await prisma.mark.deleteMany({
+      where: { enrollmentId: { in: enrollmentIds } },
+    });
+    await prisma.attendance.deleteMany({
+      where: { enrollmentId: { in: enrollmentIds } },
+    });
+
+    await prisma.mark.createMany({
+      data: enrollmentIds.map((enrollmentId) => ({
+        enrollmentId,
+        examType: "INTERNAL" as const,
+        marksObtained: spec.caMarks,
+        maxMarks: 30,
+      })),
+    });
+
+    await prisma.attendance.createMany({
+      data: enrollmentIds.flatMap((enrollmentId) =>
+        HIGH_RISK_ATTENDANCE_DATES.map((date, index) => ({
+          enrollmentId,
+          date,
+          status: index < spec.attendancePercent ? ("PRESENT" as const) : ("ABSENT" as const),
+        }))
+      ),
+    });
+
+    await prisma.mLPrediction.upsert({
+      where: { studentId: student.id },
+      update: {
+        riskScore: spec.riskScore,
+        isAtRisk: true,
+        factors: JSON.stringify(HIGH_RISK_SHAP_DRIVERS),
+        lastCalculated: new Date(),
+      },
+      create: {
+        studentId: student.id,
+        riskScore: spec.riskScore,
+        isAtRisk: true,
+        factors: JSON.stringify(HIGH_RISK_SHAP_DRIVERS),
+        lastCalculated: new Date(),
+      },
+    });
+  }
+
+  const inserted = await prisma.student.findMany({
+    where: { rollNumber: { in: rollNumbers } },
+    select: { rollNumber: true },
+  });
+  if (inserted.length !== rollNumbers.length) {
+    throw new Error(
+      `High-risk sample verification failed: expected ${rollNumbers.length}, found ${inserted.length}`
+    );
+  }
+  console.log(
+    `Seeded ${inserted.length} deterministic high-risk sample students without duplicates: ${rollNumbers.join(", ")}.`
+  );
+}
+
 async function ensureDeptHierarchy(departmentId: number, deptCode: string) {
   // 1st & 2nd Year (FY & SY): Common SOC classes, nullable specialization
   for (let i = 1; i <= SOC_CLASS_COUNT; i++) {
@@ -430,10 +662,21 @@ async function main() {
   await ensureDeptHierarchy(cse.id, "CSE");
   await ensureDeptHierarchy(it.id, "IT");
   await ensureCseSubjects(cse.id);
+  await seedHighRiskSampleStudents(cse.id);
 
   const aia1Class = await prisma.classGroup.findUniqueOrThrow({
     where: {
       name_departmentId: { name: "AIA - 1", departmentId: cse.id },
+    },
+  });
+  const aia2Class = await prisma.classGroup.findUniqueOrThrow({
+    where: {
+      name_departmentId: { name: "AIA - 2", departmentId: cse.id },
+    },
+  });
+  const aia3Class = await prisma.classGroup.findUniqueOrThrow({
+    where: {
+      name_departmentId: { name: "AIA - 3", departmentId: cse.id },
     },
   });
 
@@ -470,10 +713,10 @@ async function main() {
         phone: faker.phone.number(),
         email: `${enrollmentNumber.toLowerCase()}@student.campusiq.com`,
         attendanceRate: isAtRiskCohort
-          ? faker.number.float({ min: 0.5, max: 0.7 })
+          ? faker.number.float({ min: 0.68, max: 0.78 })
           : faker.number.float({ min: 0.8, max: 0.96 }),
         markMultiplier: isAtRiskCohort
-          ? faker.number.float({ min: 0.25, max: 0.42 })
+          ? faker.number.float({ min: 0.42, max: 0.55 })
           : faker.number.float({ min: 0.7, max: 0.98 }),
       };
     });
@@ -576,7 +819,9 @@ async function main() {
       role: "FACULTY",
       passwordHash,
       department: { connect: { id: cse.id } },
-      assignedClasses: { set: [{ id: aia1Class.id }] },
+      assignedClasses: {
+        set: [{ id: aia1Class.id }, { id: aia2Class.id }, { id: aia3Class.id }],
+      },
     },
     create: {
       name: "Test AIA-1 Faculty",
@@ -584,7 +829,9 @@ async function main() {
       passwordHash,
       role: "FACULTY",
       department: { connect: { id: cse.id } },
-      assignedClasses: { connect: { id: aia1Class.id } },
+      assignedClasses: {
+        connect: [{ id: aia1Class.id }, { id: aia2Class.id }, { id: aia3Class.id }],
+      },
     },
   });
 
@@ -660,7 +907,7 @@ async function main() {
   );
 
   console.log(
-    `Database seed completed: ${studentsCreated} mock students across ${allClasses.length} classes, plus 4 role-switching test accounts.`
+    `Database seed completed: ${studentsCreated} mock students across ${allClasses.length} classes, 8 deterministic high-risk sample students, plus 4 role-switching test accounts.`
   );
 }
 

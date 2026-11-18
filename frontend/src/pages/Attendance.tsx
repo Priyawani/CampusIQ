@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from 'xlsx';
 import api from "../services/api";
@@ -14,7 +15,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
-import { FileSpreadsheet, BellRing } from "lucide-react";
+import { FileSpreadsheet, BellRing, Zap } from "lucide-react";
 
 interface StudentUser {
   name?: string | null;
@@ -111,11 +112,22 @@ interface MonthlyReportRow {
   attendancePercentage: string;
 }
 
+interface DailyAttendanceResponse {
+  statuses: Record<string, AttendanceStatus>;
+}
+
 function Attendance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const role = getUserRole();
   const isFacultyView = role === "FACULTY" || role === "ADMIN";
+  const isDeptAdmin = role === "DEPT_ADMIN";
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const linkedClassId = Number(searchParams.get("classId"));
+  const linkedSubjectId = searchParams.get("subjectId");
+  const hasLinkedSession =
+    Number.isInteger(linkedClassId) && linkedClassId > 0 && !!linkedSubjectId;
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
@@ -133,19 +145,34 @@ function Attendance() {
   const [exportingMonthly, setExportingMonthly] = useState(false);
   const [notifying, setNotifying] = useState(false);
 
+  const activeClassGroupId = hasLinkedSession ? linkedClassId : selectedClassGroupId;
+  const activeSubjectId = hasLinkedSession ? linkedSubjectId ?? "" : selectedSubjectId;
+
   const { data: studentsData, isLoading } = useQuery({
-    queryKey: ["students", "attendance", selectedClassGroupId],
+    queryKey: ["students", "attendance", activeClassGroupId],
     queryFn: async (): Promise<Student[]> => {
-      if (selectedClassGroupId === null) return [];
+      if (activeClassGroupId === null) return [];
       const response = await api.get("/students", {
-        params: { classGroupId: selectedClassGroupId },
+        params: { classGroupId: activeClassGroupId },
       });
       const payload = response.data;
       if (Array.isArray(payload)) return payload.map(normalizeStudent);
       if (Array.isArray(payload?.data)) return payload.data.map(normalizeStudent);
       return [] as Student[];
     },
-    enabled: selectedClassGroupId !== null,
+    enabled: activeClassGroupId !== null,
+  });
+
+  const { data: dailyAttendanceData } = useQuery({
+    queryKey: ["attendance", "daily", activeClassGroupId, activeSubjectId, selectedDate],
+    queryFn: async (): Promise<Record<string, AttendanceStatus>> => {
+      if (activeClassGroupId === null || !activeSubjectId) return {};
+      const response = await api.get<DailyAttendanceResponse>("/attendance/day", {
+        params: { subjectId: activeSubjectId, date: selectedDate },
+      });
+      return response.data?.statuses ?? {};
+    },
+    enabled: activeClassGroupId !== null && !!activeSubjectId,
   });
 
   const { data: subjectsData } = useQuery({
@@ -180,22 +207,26 @@ function Attendance() {
       classGroupSpecializationParam,
     ],
     queryFn: async (): Promise<ClassGroup[]> => {
-      if (selectedDepartmentId === null || selectedYear === null) return [];
-      const response = await api.get("/students/class-groups", {
-        params: {
-          departmentId: selectedDepartmentId,
-          year: selectedYear,
-          specializationId: classGroupSpecializationParam,
-        },
-      });
+      if (selectedYear === null) return [];
+      if (!isDeptAdmin && selectedDepartmentId === null) return [];
+
+      const params: Record<string, string | number> = { year: selectedYear };
+      if (!isDeptAdmin && selectedDepartmentId !== null) {
+        params.departmentId = selectedDepartmentId;
+      }
+      if (classGroupSpecializationParam !== undefined) {
+        params.specializationId = classGroupSpecializationParam;
+      }
+
+      const response = await api.get("/students/class-groups", { params });
       const payload = response.data;
       if (Array.isArray(payload)) return payload as ClassGroup[];
       if (Array.isArray(payload?.data)) return payload.data as ClassGroup[];
       return [];
     },
     enabled:
-      selectedDepartmentId !== null &&
       selectedYear !== null &&
+      (isDeptAdmin || selectedDepartmentId !== null) &&
       (selectedYear <= 2 || selectedSpecializationId !== null),
   });
 
@@ -210,7 +241,7 @@ function Attendance() {
       if (Array.isArray(payload?.data)) return payload.data as Specialization[];
       return [];
     },
-    enabled: selectedDepartmentId !== null,
+    enabled: selectedDepartmentId !== null || isDeptAdmin,
   });
 
   const students = studentsData ?? [];
@@ -218,6 +249,7 @@ function Attendance() {
   const departments = departmentsData ?? [];
   const classGroups = classGroupsData ?? EMPTY_CLASS_GROUPS;
   const specializations = specializationsData ?? [];
+  const savedStatuses = dailyAttendanceData ?? {};
   const selectedDepartment = departments.find((d) => d.id === selectedDepartmentId) ?? null;
 
   const availableClassGroups = useMemo(
@@ -236,8 +268,8 @@ function Attendance() {
   );
 
   const visibleStudents =
-    selectedClassGroupId !== null
-      ? students.filter((student) => student.classGroupId === selectedClassGroupId)
+    activeClassGroupId !== null
+      ? students.filter((student) => student.classGroupId === activeClassGroupId)
       : students;
 
   const handleYearChange = (value: string) => {
@@ -252,6 +284,12 @@ function Attendance() {
     setSelectedClassGroupId(null);
   };
 
+  const clearLinkedSession = () => {
+    setSearchParams({}, { replace: true });
+    setSelectedClassGroupId(null);
+    setSelectedSubjectId("");
+  };
+
   // Default to the first subject once loaded so the batch payload always has one.
   useEffect(() => {
     if (!selectedSubjectId && subjects.length > 0) {
@@ -262,7 +300,7 @@ function Attendance() {
   // Reset the draft when the date/subject/class context changes.
   useEffect(() => {
     setDraft({});
-  }, [selectedDate, selectedSubjectId, selectedClassGroupId]);
+  }, [selectedDate, activeSubjectId, activeClassGroupId]);
 
   const markStatus = (studentId: string, status: AttendanceStatus) => {
     setDraft((prev) => ({ ...prev, [studentId]: status }));
@@ -274,7 +312,7 @@ function Attendance() {
       status,
     }));
 
-    if (!selectedSubjectId) {
+    if (!activeSubjectId) {
       toast({
         title: "Select a subject",
         description: "Choose a subject before saving attendance.",
@@ -296,7 +334,7 @@ function Attendance() {
     try {
       await api.post("/attendance/batch", {
         date: selectedDate,
-        subjectId: selectedSubjectId,
+        subjectId: activeSubjectId,
         records,
       });
       toast({
@@ -304,6 +342,7 @@ function Attendance() {
         description: `Saved ${records.length} record(s) for ${selectedDate}.`,
       });
       queryClient.invalidateQueries({ queryKey: ["attendance"] });
+      queryClient.invalidateQueries({ queryKey: ["attendance", "daily"] });
       queryClient.invalidateQueries({ queryKey: ["students"] });
     } catch (error) {
       console.error("Failed to save batch attendance:", error);
@@ -332,7 +371,7 @@ function Attendance() {
   };
 
   const handleExportMonthlyReport = async () => {
-    if (!selectedSubjectId) {
+    if (!activeSubjectId) {
       toast({ title: "Select a subject", description: "Choose a subject before exporting the monthly report.", variant: "destructive" });
       return;
     }
@@ -343,7 +382,7 @@ function Attendance() {
     setExportingMonthly(true);
     try {
       const response = await api.get<MonthlyReportRow[]>("/attendance/monthly-report", {
-        params: { subjectId: selectedSubjectId, month: selectedMonth },
+        params: { subjectId: activeSubjectId, month: selectedMonth },
       });
       const rows = Array.isArray(response.data) ? response.data : [];
       const data = rows.map((row) => ({
@@ -364,15 +403,15 @@ function Attendance() {
   };
 
   const handleNotifyParents = async () => {
-    if (!selectedClassGroupId) {
+    if (!activeClassGroupId) {
       toast({ title: "Select a class", description: "Choose a class to notify parents for absent students.", variant: "destructive" });
       return;
     }
     setNotifying(true);
     try {
       const res = await api.post("/attendance/notify-parents", {
-        classGroupId: selectedClassGroupId,
-        subjectId: selectedSubjectId || undefined,
+        classGroupId: activeClassGroupId,
+        subjectId: activeSubjectId || undefined,
         date: selectedDate,
       });
       const d = res.data ?? {};
@@ -385,7 +424,7 @@ function Attendance() {
     }
   };
 
-  if (!isFacultyView) {
+  if (!isFacultyView && !isDeptAdmin) {
     return (
       <div className="p-8 max-w-7xl w-full mx-auto">
         <p className="text-sm text-slate-600">
@@ -402,7 +441,9 @@ function Attendance() {
           <div>
             <p className="text-xs text-slate-500 font-medium">CampusIQ / Attendance</p>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Daily Attendance</h1>
-            <p className="text-sm text-slate-500 mt-1">Faculty View</p>
+            <p className="text-sm text-slate-500 mt-1">
+              {isFacultyView ? "Faculty View" : "Department Admin View — Read Only"}
+            </p>
           </div>
           <div className="flex gap-2 items-center">
             <input
@@ -412,13 +453,15 @@ function Attendance() {
               aria-label="Select month for monthly report"
               className="px-4 h-10 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
             />
-            <Button
-              onClick={handleSaveAttendance}
-              disabled={saving}
-              className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white"
-            >
-              {saving ? "Saving..." : "Save Attendance"}
-            </Button>
+            {isFacultyView && (
+              <Button
+                onClick={handleSaveAttendance}
+                disabled={saving}
+                className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white"
+              >
+                {saving ? "Saving..." : "Save Attendance"}
+              </Button>
+            )}
             <Button
               onClick={handleExportMonthlyReport}
               disabled={exportingMonthly}
@@ -428,16 +471,42 @@ function Attendance() {
               <FileSpreadsheet className="h-4 w-4" />
               {exportingMonthly ? "Exporting..." : "Export Monthly Report"}
             </Button>
-            <Button onClick={handleNotifyParents} disabled={notifying} variant="outline" className="h-10 px-4 border-amber-300 text-amber-700 hover:bg-amber-50">
-              <BellRing className="h-4 w-4 mr-1" />
-              {notifying ? "Notifying..." : "Notify Parents"}
-            </Button>
+            {isFacultyView && (
+              <Button onClick={handleNotifyParents} disabled={notifying} variant="outline" className="h-10 px-4 border-amber-300 text-amber-700 hover:bg-amber-50">
+                <BellRing className="h-4 w-4 mr-1" />
+                {notifying ? "Notifying..." : "Notify Parents"}
+              </Button>
+            )}
             <Button onClick={handleExportToExcel} variant="outline" className="h-10 px-6">
               Export Daily (Excel)
             </Button>
           </div>
         </header>
 
+        {hasLinkedSession && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                <Zap className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-600">
+                  Quick session from My Day
+                </p>
+                <p className="text-sm font-semibold text-slate-900">
+                  {subjects.find((subject) => String(subject.id) === activeSubjectId)?.name ?? `Subject #${activeSubjectId}`}
+                  {" · "}
+                  {visibleStudents[0]?.className ?? `Class #${activeClassGroupId}`}
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" onClick={clearLinkedSession}>
+              Change filters
+            </Button>
+          </div>
+        )}
+
+        {!hasLinkedSession && (
         <div className="flex flex-wrap gap-4 justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Tracking</p>
@@ -449,7 +518,7 @@ function Attendance() {
                 Department
               </label>
               <div className="h-10 px-3 flex items-center rounded-lg border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700 min-w-28">
-                {selectedDepartment?.code ?? "Not selected"}
+                {isDeptAdmin ? "Your Department" : selectedDepartment?.code ?? "Not selected"}
               </div>
             </div>
             <div>
@@ -542,13 +611,14 @@ function Attendance() {
             </div>
           </div>
         </div>
-        {!selectedDepartmentId && (
+        )}
+        {!hasLinkedSession && !isDeptAdmin && !selectedDepartmentId && (
           <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
             Select CSE or IT from the Dashboard to enable department, year, and class filters.
           </p>
         )}
 
-        {selectedClassGroupId === null ? (
+        {activeClassGroupId === null ? (
           <div className="p-8 text-center text-gray-500">
             Please select a specific class (e.g., SOC - 1, AIA - 9) to view students.
           </div>
@@ -560,32 +630,58 @@ function Attendance() {
                 <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Roll No</TableHead>
                 <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Enrollment No</TableHead>
                 <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Name</TableHead>
+                <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Status</TableHead>
                 <TableHead className="h-8 px-2 py-1 text-xs font-bold text-slate-700 whitespace-nowrap">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow className="h-8 hover:bg-slate-50">
-                  <TableCell colSpan={4} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">Loading students...</TableCell>
+                  <TableCell colSpan={5} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">Loading students...</TableCell>
                 </TableRow>
               ) : visibleStudents.length === 0 ? (
                 <TableRow className="h-8 hover:bg-slate-50">
-                  <TableCell colSpan={4} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">No students found.</TableCell>
+                  <TableCell colSpan={5} className="h-8 px-2 py-1 text-xs whitespace-nowrap text-center">No students found.</TableCell>
                 </TableRow>
               ) : (
                 visibleStudents?.map((student: any) => {
-                  const current = draft[student?.id];
+                  const current = draft[student?.id] ?? savedStatuses[student?.id];
                   return (
-                    <TableRow key={student?.id} className="h-8 hover:bg-slate-50">
+                    <TableRow
+                      key={student?.id}
+                      className={`h-8 ${
+                        current === "PRESENT"
+                          ? "bg-emerald-50/50 hover:bg-emerald-100/60"
+                          : current === "ABSENT"
+                            ? "bg-rose-50/50 hover:bg-rose-100/60"
+                            : "hover:bg-slate-50"
+                      }`}
+                    >
                       <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">{student?.rollNo || "-"}</TableCell>
                       <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap"><span className="font-semibold text-slate-900">{student?.enrollmentNo || "-"}</span></TableCell>
                       <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">{student?.user?.name || student?.name || "Unknown"}</TableCell>
+                      <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">
+                        {current === "PRESENT" ? (
+                          <span className="inline-flex bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold px-2.5 py-0.5 rounded-full">
+                            Present
+                          </span>
+                        ) : current === "ABSENT" ? (
+                          <span className="inline-flex bg-rose-100 text-rose-800 border border-rose-300 font-semibold px-2.5 py-0.5 rounded-full">
+                            Absent
+                          </span>
+                        ) : (
+                          <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
+                            Not marked
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell className="h-8 px-2 py-1 text-xs whitespace-nowrap">
                         <div className="flex gap-1">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => markStatus(student?.id, "PRESENT")}
+                            disabled={!isFacultyView}
                             className={`h-6 w-6 p-0 text-xs ${current === "PRESENT" ? "bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white border-emerald-600" : ""}`}
                           >
                             P
@@ -594,6 +690,7 @@ function Attendance() {
                             variant="outline"
                             size="sm"
                             onClick={() => markStatus(student?.id, "ABSENT")}
+                            disabled={!isFacultyView}
                             className={`h-6 w-6 p-0 text-xs ${current === "ABSENT" ? "bg-rose-600 text-white hover:bg-rose-700 hover:text-white border-rose-600" : ""}`}
                           >
                             A

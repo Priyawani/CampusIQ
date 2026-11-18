@@ -44,6 +44,7 @@ function Marks() {
   const queryClient = useQueryClient();
   const role = getUserRole();
   const isFacultyView = role === "FACULTY" || role === "ADMIN";
+  const isDeptAdmin = role === "DEPT_ADMIN";
 
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
@@ -188,7 +189,7 @@ function Marks() {
     }
   };
 
-  if (!isFacultyView) {
+  if (!isFacultyView && !isDeptAdmin) {
     return (
       <div className="p-8 max-w-7xl w-full mx-auto">
         <p className="text-sm text-slate-600">
@@ -205,15 +206,23 @@ function Marks() {
           <div>
             <p className="text-xs text-slate-500 font-medium">CampusIQ / Marks</p>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Academic Records</h1>
-            <p className="text-sm text-slate-500 mt-1">Faculty View — Batch Grading</p>
+            <p className="text-sm text-slate-500 mt-1">
+              {isFacultyView ? "Faculty View — Batch Grading" : "Department Admin View — Read Only"}
+            </p>
           </div>
-          <Button
-            onClick={handleSaveAllMarks}
-            disabled={saving}
-            className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white"
-          >
-            {saving ? "Saving..." : "Save All Marks"}
-          </Button>
+          {isFacultyView ? (
+            <Button
+              onClick={handleSaveAllMarks}
+              disabled={saving}
+              className="bg-indigo-600 hover:bg-indigo-700 h-10 px-6 text-white"
+            >
+              {saving ? "Saving..." : "Save All Marks"}
+            </Button>
+          ) : (
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600">
+              Read only
+            </span>
+          )}
         </header>
 
         <div className="flex flex-wrap gap-4 justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
@@ -278,13 +287,16 @@ function Marks() {
                 step="0.5"
                 value={maxMarks}
                 onChange={(e) => setMaxMarks(e.target.value)}
+                disabled={!isFacultyView}
                 className="w-28"
               />
             </div>
           </div>
-          <p className="text-xs text-slate-500">
-            {Object.values(scores).filter((v) => v !== "").length} of {visibleStudents.length} scored
-          </p>
+          {isFacultyView && (
+            <p className="text-xs text-slate-500">
+              {Object.values(scores).filter((v) => v !== "").length} of {visibleStudents.length} scored
+            </p>
+          )}
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-y-auto max-h-[70vh]">
@@ -323,6 +335,7 @@ function Marks() {
                         placeholder="—"
                         value={scores[student.id] ?? ""}
                         onChange={(e) => handleScoreChange(student.id, e.target.value)}
+                        disabled={!isFacultyView}
                         className="h-6 w-16 text-xs px-1 py-0"
                       />
                     </TableCell>
